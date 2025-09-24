@@ -22,6 +22,9 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/")
 
 # Add submodules (they will use the minimal warning flags above)
 add_subdirectory(lib/SDL)
+
+# Configure shader-works to not build examples (which contain conflicting SDL)
+set(SHADER_WORKS_BUILD_EXAMPLES OFF CACHE BOOL "Don't build shader-works examples")
 add_subdirectory(lib/shader-works)
 
 # Find source files in src directory
