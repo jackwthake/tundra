@@ -23,8 +23,9 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/")
 # Add submodules (they will use the minimal warning flags above)
 add_subdirectory(lib/SDL)
 
-# Configure shader-works to not build examples (which contain conflicting SDL)
+# Configure shader-works to not build examples (which contain conflicting SDL) and disable threading
 set(SHADER_WORKS_BUILD_EXAMPLES OFF CACHE BOOL "Don't build shader-works examples")
+set(SHADER_WORKS_USE_THREADS ON CACHE BOOL "Disable threading for debugging")
 add_subdirectory(lib/shader-works)
 
 # Find source files in src directory
@@ -54,8 +55,6 @@ if(SOURCES)
         -Wpedantic
         -Wstrict-prototypes
         -Wshadow
-        -Wconversion
-        -Wsign-conversion
     )
 else()
     message(STATUS "No source files found in src/ directory")

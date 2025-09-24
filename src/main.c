@@ -1,6 +1,9 @@
 #include <float.h>
 #include <math.h>
 #include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
 
 #include <shader-works/renderer.h>
 #include <shader-works/primitives.h>
@@ -16,20 +19,17 @@
 #define WIN_SCALE 4
 #define WIN_TITLE "Tundra"
 #define MAX_DEPTH 15
+#define NUM_TREES 5
 
 typedef struct {
   float move_speed;
   float mouse_sensitivity;
   float min_pitch, max_pitch;
   float ground_height;
+  float camera_height_offset;
   float delta_time;
   uint64_t last_frame_time;
 } fps_controller_t;
-
-static inline float map_range(float value, float old_min, float old_max, float new_min, float new_max) {
-  return new_min + (value - old_min) * (new_max - new_min) /
-  (old_max - old_min);
-}
 
 u32 rgb_to_u32(u8 r, u8 g, u8 b) {
   const SDL_PixelFormatDetails *format = SDL_GetPixelFormatDetails(SDL_PIXELFORMAT_RGBA8888);
@@ -41,9 +41,20 @@ void u32_to_rgb(u32 color, u8 *r, u8 *g, u8 *b) {
   SDL_GetRGB(color, format, NULL, r, g, b);
 }
 
-u32 soft_red_shader_func(u32 input, fragment_context_t *ctx, void *args, usize argc) {
-  (void)input; (void)ctx; (void)args; (void)argc;
-  return default_lighting_frag_shader.func(rgb_to_u32(255, 100, 100), ctx, args, argc);
+u32 brown_shader_func(u32 input, fragment_context_t *ctx, void *args, usize argc) {
+  (void)input; (void)args; (void)argc;
+  
+  // white/black noise pattern based on world position
+  float check_size = 0.5f;
+  float x = floorf(ctx->world_pos.x / check_size);
+  float z = floorf(ctx->world_pos.y / check_size);
+
+  float intensity = map_range(noise2D(x, z, WORLD_SEED), -1.0f, 1.0f, 0.85f, 1.0f);
+
+  u8 r = (u8)(130.f * intensity);
+  u8 g = (u8)(70.f * intensity);
+  u8 b = (u8)(20.f * intensity);
+  return default_lighting_frag_shader.func(rgb_to_u32(r, g, b), ctx, args, argc);
 }
 
 u32 ground_shader_func(u32 input, fragment_context_t *ctx, void *args, usize argc) {
@@ -54,7 +65,7 @@ u32 ground_shader_func(u32 input, fragment_context_t *ctx, void *args, usize arg
   float x = floorf(ctx->world_pos.x / check_size);
   float z = floorf(ctx->world_pos.z / check_size);
 
-  float intensity = map_range(noise2D(x, z), -1.0f, 1.0f, 0.75f, 1.0f);
+  float intensity = map_range(noise2D(x, z, WORLD_SEED), -1.0f, 1.0f, 0.85f, 1.0f);
 
   u8 r = (u8)(255.f * intensity);
   u8 g = (u8)(255.f * intensity);
@@ -69,6 +80,7 @@ void update_timing(fps_controller_t *controller) {
   if (controller->delta_time > 0.1f) controller->delta_time = 0.1f;
 }
 
+// Something strange goes on here
 float get_interpolated_terrain_height(const model_t *ground, float x, float z) {
   // Get terrain bounds and segment size from the ground model
   float2 size = {64, 64}; // Match the generate_ground call
@@ -88,7 +100,7 @@ float get_interpolated_terrain_height(const model_t *ground, float x, float z) {
 
   // Clamp to valid range
   if (gx < 0 || gx >= grid_width-1 || gz < 0 || gz >= grid_height-1) {
-    return terrainHeight(x, z); // Fallback for out of bounds
+    return terrainHeight(x, z, WORLD_SEED); // Fallback for out of bounds
   }
 
   // Get fractional parts for interpolation
@@ -113,7 +125,7 @@ void generate_ground(model_t *model, float2 size, float2 segment_size, float3 po
 
   for (usize i = 0; i < model->num_vertices; ++i) {
     float3 *v = &model->vertex_data[i].position;
-    v->y = terrainHeight(v->x, v->z);
+    v->y = terrainHeight(v->x, v->z, WORLD_SEED);
   }
 
   // Recalculate face normals after terrain height modification
@@ -127,6 +139,11 @@ void generate_ground(model_t *model, float2 size, float2 segment_size, float3 po
     float3 edge2 = float3_sub(v2, v0);
 
     model->face_normals[i] = float3_normalize(float3_cross(edge2, edge1));
+  }
+
+  // Recalculate vertex normals after terrain height modification
+  for (usize i = 0; i < model->num_vertices; ++i) {
+    model->vertex_data[i].normal = model->face_normals[i / 3];
   }
 }
 
@@ -157,16 +174,30 @@ void handle_input(fps_controller_t *controller, transform_t *camera, bool *mouse
   if (keys[SDL_SCANCODE_D]) movement = float3_add(movement, float3_scale(right, -speed));
   
   camera->position = float3_add(camera->position, movement);
-  controller->ground_height = get_interpolated_terrain_height(ground, camera->position.x, camera->position.z);
+  float new_ground_height = get_interpolated_terrain_height(ground, camera->position.x, camera->position.z);
 
-  // Use a larger offset and ensure minimum height above terrain
-  float terrain_clearance = fmaxf(3.0f, fabsf(controller->ground_height) * 0.1f + 2.0f);
-  camera->position.y = controller->ground_height + terrain_clearance;
+  // Safety check: if terrain height calculation fails or gives extreme values, use previous height
+  if (!isfinite(new_ground_height) || fabsf(new_ground_height - controller->ground_height) > 20.0f) {
+    new_ground_height = controller->ground_height; // Keep previous height
+  }
+
+  controller->ground_height = new_ground_height;
+
+  // Use the camera height offset
+  float target_y = controller->ground_height + controller->camera_height_offset;
+
+  // Prevent sudden drops - limit how much the camera can drop per frame
+  if (target_y < camera->position.y - 10.0f) {
+    target_y = camera->position.y - 10.0f; // Max drop of 10 units per frame
+  }
+
+  camera->position.y = target_y;
 }
 
 int main(int argc, char *argv[]) {
   (void)argc; (void)argv;
   SDL_Init(SDL_INIT_VIDEO);
+  srand(WORLD_SEED);
   
   SDL_Window *window;
   SDL_Renderer *renderer;
@@ -184,33 +215,66 @@ int main(int argc, char *argv[]) {
     .min_pitch = -PI/3,
     .max_pitch = PI/3,
     .ground_height = 2.0f,
+    .camera_height_offset = 6.0f,
     .last_frame_time = SDL_GetPerformanceCounter()
   };
   
   transform_t camera = { .position = make_float3(0, 5, 0) };
-  bool mouse_captured = true;
+  bool mouse_captured = false;
   bool running = true;
   
-  SDL_SetWindowRelativeMouseMode(window, true);
+  SDL_SetWindowRelativeMouseMode(window, false);
   
   renderer_t renderer_state = {0};
   init_renderer(&renderer_state, WIN_WIDTH, WIN_HEIGHT, 0, 0, framebuffer, depthbuffer, MAX_DEPTH);
   
-  fragment_shader_t soft_red_shader = make_fragment_shader(soft_red_shader_func, NULL, 0);
+  fragment_shader_t brown_shader = make_fragment_shader(brown_shader_func, NULL, 0);
   fragment_shader_t soft_green_shader = make_fragment_shader(ground_shader_func, NULL, 0);
   
-  model_t ground = {0}, cube = {0};
-  generate_cube(&cube, make_float3(0, 2, -6), make_float3(1, 1, 1));
+  model_t ground = {0}, tree_trunk = {0};
   generate_ground(&ground, make_float2(64, 64), make_float2(4, 4), make_float3(0, 0, 0));
   
-  cube.frag_shader = &soft_red_shader;
   ground.frag_shader = &soft_green_shader;
-  ground.vertex_shader = cube.vertex_shader = &default_vertex_shader;
-  ground.use_textures = cube.use_textures = false;
-  
-  cube.transform.yaw = PI/4;
-  cube.transform.pitch = PI/8;
-  
+  ground.vertex_shader = tree_trunk.vertex_shader = &default_vertex_shader;
+  ground.use_textures = tree_trunk.use_textures = false;
+
+  model_t trees[NUM_TREES] = { 0 };
+
+  // Initialize trees with random parameters
+  for (int i = 0; i < NUM_TREES; i++) {
+    // Random position within terrain bounds
+    float x = ((float)rand() / RAND_MAX) * 60.0f - 30.0f; // -30 to 30
+    float z = ((float)rand() / RAND_MAX) * 60.0f - 30.0f; // -30 to 30
+    float y = get_interpolated_terrain_height(&ground, x, z);
+
+    float3 tree_pos = make_float3(x, y, z);
+
+    // Bigger trees with more branches
+    float base_radius = 0.25f + ((float)rand() / RAND_MAX) * 0.4f;  // 0.25 to 0.65 (bigger)
+    float base_angle = ((float)rand() / RAND_MAX) * 2.0f * PI;      // 0 to 2π
+    float branch_chance = 0.7f + ((float)rand() / RAND_MAX) * 0.2f; // 0.7 to 0.9 (more branches)
+    usize max_branches = 5 + (rand() % 4);                          // 5 to 8 (more branches)
+    usize num_levels = 5 + (rand() % 3);                           // 5 to 7 (more levels)
+
+    // Initialize the model properly
+    trees[i].vertex_data = NULL;
+    trees[i].face_normals = NULL;
+    trees[i].num_vertices = 0;
+    trees[i].num_faces = 0;
+    trees[i].transform = (transform_t){0};
+
+    int result = generate_tree(&trees[i], base_radius, base_angle, tree_pos, branch_chance, max_branches, 0, num_levels);
+    if (result < 0) {
+      printf("Failed to generate tree %d at position (%.2f, %.2f, %.2f)\n", i, x, y, z);
+    }
+
+    trees[i].transform.position.y -= 0.5f;
+
+    trees[i].frag_shader = &brown_shader;
+    trees[i].vertex_shader = &default_vertex_shader;
+    trees[i].use_textures = false;
+  }
+
   float terrain_height = get_interpolated_terrain_height(&ground, camera.position.x, camera.position.z);
   controller.ground_height = terrain_height;
   float terrain_clearance = fmaxf(3.0f, fabsf(terrain_height) * 0.1f + 2.0f);
@@ -219,7 +283,7 @@ int main(int argc, char *argv[]) {
   light_t sun = {
     .is_directional = true,
     .direction = make_float3(-1, -1, -1),
-    .color = rgb_to_u32(255, 255, 255)
+    .color = rgb_to_u32(255, 225, 255)
   };
   
   while (running) {
@@ -243,9 +307,20 @@ int main(int argc, char *argv[]) {
     }
     
     render_model(&renderer_state, &camera, &ground, &sun, 1);
-    render_model(&renderer_state, &camera, &cube, &sun, 1);
-    
-    apply_fog_to_screen(&renderer_state, 7.5f, 15.f, 100, 120, 255);
+
+    // Only render tree_trunk if it has valid vertex data
+    if (tree_trunk.vertex_data != NULL && tree_trunk.num_vertices > 0) {
+      render_model(&renderer_state, &camera, &tree_trunk, &sun, 1);
+    }
+
+    // Render all trees (only if they have valid vertex data)
+    for (int i = 0; i < NUM_TREES; i++) {
+      if (trees[i].vertex_data != NULL && trees[i].num_vertices > 0) {
+        render_model(&renderer_state, &camera, &trees[i], &sun, 1);
+      }
+    }
+
+    apply_fog_to_screen(&renderer_state, 15.f, 30.f, 100, 120, 255);
 
     SDL_UpdateTexture(framebuffer_tex, NULL, framebuffer, WIN_WIDTH * sizeof(u32));
     SDL_RenderTexture(renderer, framebuffer_tex, NULL, NULL);
@@ -253,7 +328,12 @@ int main(int argc, char *argv[]) {
   }
   
   delete_model(&ground);
-  delete_model(&cube);
+  delete_model(&tree_trunk);
+
+  // Clean up all trees
+  for (int i = 0; i < NUM_TREES; i++) {
+    delete_model(&trees[i]);
+  }
   SDL_DestroyTexture(framebuffer_tex);
   SDL_DestroyRenderer(renderer);
   SDL_DestroyWindow(window);
