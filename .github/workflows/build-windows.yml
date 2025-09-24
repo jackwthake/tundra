@@ -25,7 +25,8 @@ jobs:
           -DCMAKE_BUILD_TYPE=Release `
           -DSDL_SHARED=ON `
           -DSDL_STATIC=OFF `
-          -DSHADER_WORKS_ENABLE_THREADING=ON
+          -DSHADER_WORKS_USE_THREADS=ON `
+          -DSHADER_WORKS_BUILD_EXAMPLES=OFF
 
     - name: Build
       run: cmake --build build --config Release --parallel

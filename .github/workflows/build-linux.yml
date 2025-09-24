@@ -53,7 +53,8 @@ jobs:
           -DSDL_STATIC=OFF \
           -DSDL_WAYLAND=ON \
           -DSDL_X11=ON \
-          -DSHADER_WORKS_ENABLE_THREADING=ON
+          -DSHADER_WORKS_USE_THREADS=ON \
+          -DSHADER_WORKS_BUILD_EXAMPLES=OFF
 
     - name: Build
       run: cmake --build build --parallel
