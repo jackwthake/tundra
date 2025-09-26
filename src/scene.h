@@ -1,22 +1,37 @@
 #ifndef SCENE_H
 #define SCENE_H
 
+#include <shader-works/renderer.h>
 #include <shader-works/primitives.h>
 #include <shader-works/maths.h>
 
 // Master seed for all procedural generation
-#define WORLD_SEED 420 * 69
+#define WORLD_SEED 2
+#define CHUNK_SIZE 64
+#define HALF_CHUNK_SIZE CHUNK_SIZE / 2
+#define MAX_CHUNK_DISTANCE 2
 
-float map_range(float value, float old_min, float old_max, float new_min, float new_max);
+typedef struct {
+  float x, z;
+  model_t ground_plane;
+  model_t *trees;
+  usize num_trees;
+} chunk_t;
 
-float lerp(float a, float b, float t);
-float smoothstep(float t);
-float hash2(int x, int y, int seed);
+// Implementation found in proc_gen.c
+extern float map_range(float value, float old_min, float old_max, float new_min, float new_max);
 
-float noise2D(float x, float y, int seed);
-float terrainHeight(float x, float y, int seed);
+extern float lerp(float a, float b, float t);
+extern float hash2(int x, int y, int seed);
 
-int generate_tree(model_t *model, float base_radius, float base_angle, float3 base_position, float branch_chance, usize max_branches, usize level, usize num_level);
-int generate_tree_cylinder(model_t* model, float bottom_radius, float top_radius, float height, float3 bottom_center, float3 top_center, usize segments, float bottom_angle_offset, float top_angle_offset);
+extern float noise2D(float x, float y, int seed);
+extern float terrainHeight(float x, float y, int seed);
+extern float get_interpolated_terrain_height(float x, float z);
 
+// Implementation found in scene.c
+void generate_chunk(chunk_t *chunk, float x, float z);
+void render_chunk(renderer_t *state, chunk_t *chunk, transform_t *camera, light_t *lights, const usize num_lights);
+bool should_chunk_unload(transform_t *player, chunk_t *chunk);
+void unload_chunk(chunk_t *chunk);
+  
 #endif // SCENE_H
