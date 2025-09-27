@@ -28,27 +28,7 @@ jobs:
         sudo apt-get install -y \
           build-essential \
           cmake \
-          ninja-build \
-          pkg-config \
-          libx11-dev \
-          libxext-dev \
-          libxi-dev \
-          libxrandr-dev \
-          libxss-dev \
-          libgl1-mesa-dev \
-          libgles2-mesa-dev \
-          libegl1-mesa-dev \
-          libdrm-dev \
-          libxkbcommon-dev \
-          libdecor-0-dev \
-          libasound2-dev \
-          libpulse-dev \
-          libjack-jackd2-dev \
-          libpipewire-0.3-dev \
-          libwayland-dev \
-          wayland-protocols \
-          libxss-dev \
-          libibus-1.0-dev
+          ninja-build
 
     - name: Configure CMake
       shell: wsl-bash {0}
