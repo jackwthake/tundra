@@ -13,7 +13,7 @@
 #define HALF_CHUNK_SIZE CHUNK_SIZE / 2
 #define GROUND_SEGMENTS_PER_CHUNK 4
 #define GROUND_SEGMENT_SIZE ((float)CHUNK_SIZE / (float)GROUND_SEGMENTS_PER_CHUNK)
-#define MAX_CHUNKS 6  // Player + 2 forward + 2 sides + 2 forward diagonals
+#define MAX_CHUNKS 9  // Player + 2 forward + 2 sides + 2 forward diagonals
 
 typedef struct {
   float move_speed;

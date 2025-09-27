@@ -23,18 +23,18 @@
 
 void update_timing(fps_controller_t *controller) {
   uint64_t current_time = SDL_GetPerformanceCounter();
- 
+  
   controller->delta_time = (float)(current_time - controller->last_frame_time) / (float)SDL_GetPerformanceFrequency();
   controller->last_frame_time = current_time;
-
+  
   if (controller->delta_time > 0.1f) controller->delta_time = 0.1f;
 }
 
-void handle_input(fps_controller_t *controller, transform_t *camera, bool *mouse_captured) {
+void handle_input(fps_controller_t *controller, transform_t *camera, bool *mouse_captured, bool overhead) {
   const bool *keys = SDL_GetKeyboardState(NULL);
   
   // Mouse input
-  if (*mouse_captured) {
+  if (*mouse_captured && !overhead) {
     float mx, my;
     SDL_GetRelativeMouseState(&mx, &my);
     
@@ -44,17 +44,18 @@ void handle_input(fps_controller_t *controller, transform_t *camera, bool *mouse
     if (camera->pitch < controller->min_pitch) camera->pitch = controller->min_pitch;
     if (camera->pitch > controller->max_pitch) camera->pitch = controller->max_pitch;
   }
-  
+
   // Keyboard movement
-  float cy = cosf(camera->yaw), sy = sinf(camera->yaw);
-  float cp = cosf(camera->pitch), sp = sinf(camera->pitch);
-  float3 right = make_float3(cy, 0, -sy);
-  float3 forward = make_float3(-sy * cp, sp, -cy * cp);
+  float3 right, up, forward;
+  transform_get_basis_vectors(camera, &right, &up, &forward);
+
   float3 movement = make_float3(0, 0, 0);
   float speed = controller->move_speed * controller->delta_time;
   
-  if (keys[SDL_SCANCODE_W]) movement = float3_add(movement, float3_scale(forward, speed));
-  if (keys[SDL_SCANCODE_S]) movement = float3_add(movement, float3_scale(forward, -speed));
+  if (keys[SDL_SCANCODE_W] && !overhead) movement = float3_add(movement, float3_scale(forward, -speed));
+  if (keys[SDL_SCANCODE_S] && !overhead) movement = float3_add(movement, float3_scale(forward, speed));
+  if (keys[SDL_SCANCODE_W] && overhead) movement = float3_add(movement, float3_scale(up, -speed));
+  if (keys[SDL_SCANCODE_S] && overhead) movement = float3_add(movement, float3_scale(up, speed));
   if (keys[SDL_SCANCODE_A]) movement = float3_add(movement, float3_scale(right, speed));
   if (keys[SDL_SCANCODE_D]) movement = float3_add(movement, float3_scale(right, -speed));
   
@@ -75,8 +76,10 @@ void handle_input(fps_controller_t *controller, transform_t *camera, bool *mouse
   if (target_y < camera->position.y - 10.0f) {
     target_y = camera->position.y - 10.0f; // Max drop of 10 units per frame
   }
-  
-  camera->position.y = target_y;
+
+  if (!overhead) {
+    camera->position.y = target_y;
+  }
 }
 
 int main(int argc, char *argv[]) {
@@ -96,27 +99,27 @@ int main(int argc, char *argv[]) {
   
   bool mouse_captured = false;
   bool running = true;
-
+  
   // Fixed timestep variables
   const float TICK_RATE = 20.0f; // 20 TPS
   const float TICK_INTERVAL = 1.0f / TICK_RATE;
   float accumulator = 0.0f;
   uint64_t last_time = SDL_GetPerformanceCounter();
-
+  
   // Performance counters
   uint64_t fps_counter = 0;
   uint64_t tps_counter = 0;
   uint64_t triangle_counter = 0;
   uint64_t last_counter_time = SDL_GetPerformanceCounter();
-
+  
   SDL_SetWindowRelativeMouseMode(window, false);
   
   renderer_t renderer_state = {0};
   init_renderer(&renderer_state, WIN_WIDTH, WIN_HEIGHT, 0, 0, framebuffer, depthbuffer, MAX_DEPTH);
-
+  
   scene_t scene = {0};
   init_scene(&scene, MAX_CHUNKS);
-
+  
   float terrain_height = get_interpolated_terrain_height(scene.camera_pos.position.x, scene.camera_pos.position.z);
   scene.controller.ground_height = terrain_height;
   float terrain_clearance = fmaxf(3.0f, fabsf(terrain_height) * 0.1f + 2.0f);
@@ -128,59 +131,79 @@ int main(int argc, char *argv[]) {
     .color = rgb_to_u32(255, 225, 255)
   };
   
+  bool overhead_mode = false;
   while (running) {
     uint64_t current_time = SDL_GetPerformanceCounter();
     float frame_time = (float)(current_time - last_time) / (float)SDL_GetPerformanceFrequency();
     last_time = current_time;
-
+    
     // Cap frame time to prevent spiral of death
     if (frame_time > 0.1f) frame_time = 0.1f;
-
+    
     accumulator += frame_time;
-
+    
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
       if (event.type == SDL_EVENT_QUIT) running = false;
-      if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) {
-        mouse_captured = !mouse_captured;
-        SDL_SetWindowRelativeMouseMode(window, mouse_captured);
+      if (event.type == SDL_EVENT_KEY_DOWN) {
+        if (event.key.key == SDLK_ESCAPE) {
+          mouse_captured = !mouse_captured;
+          SDL_SetWindowRelativeMouseMode(window, mouse_captured);
+        }
+        
+        if (event.key.key == SDLK_1) {
+          overhead_mode = !overhead_mode;
+        }
+        
+        if (event.key.key == SDLK_2) {
+          renderer_state.wireframe_mode = !renderer_state.wireframe_mode;
+        }
       }
     }
-
+    
     // Fixed timestep game updates
     while (accumulator >= TICK_INTERVAL) {
       scene.controller.delta_time = TICK_INTERVAL;
-      handle_input(&scene.controller, &scene.camera_pos, &mouse_captured);
+      handle_input(&scene.controller, &scene.camera_pos, &mouse_captured, overhead_mode);
       update_loaded_chunks(&scene);
-
+      
       accumulator -= TICK_INTERVAL;
       tps_counter++;
     }
-
+    
+    if (overhead_mode) {
+      scene.camera_pos.position.y = 200;
+      scene.camera_pos.pitch = -PI / 2;
+      renderer_state.max_depth = 250;
+    }
+    
     update_camera(&renderer_state, &scene.camera_pos);
     
     for(int i = 0; i < WIN_WIDTH * WIN_HEIGHT; ++i) {
       framebuffer[i] = rgb_to_u32(100, 120, 255);
       depthbuffer[i] = FLT_MAX;
     }
-
+    
     // Render at unlimited FPS
     usize triangles_rendered = render_loaded_chunks(&renderer_state, &scene, &sun, 1);
-    apply_fog_to_screen(&renderer_state, 20.f, 30.f, 100, 120, 255);
+    
+    if (!overhead_mode)
+      apply_fog_to_screen(&renderer_state, 20.f, 30.f, 100, 120, 255);
+    else {
+      model_t cube = { 0 };
+      float3 pos = make_float3(scene.camera_pos.position.x, scene.controller.ground_height + 3, scene.camera_pos.position.z);
+      generate_cube(&cube, pos, (float3){ 2, 1, 2 });
 
+      render_model(&renderer_state, &scene.camera_pos, &cube, &sun, 1);
+    }
+    
     SDL_UpdateTexture(framebuffer_tex, NULL, framebuffer, WIN_WIDTH * sizeof(u32));
     SDL_RenderTexture(renderer, framebuffer_tex, NULL, NULL);
     SDL_RenderPresent(renderer);
-
+    
     fps_counter++;
     triangle_counter += triangles_rendered;
-
-    // Debug: print triangles per frame occasionally
-    static int debug_frame_count = 0;
-    if (++debug_frame_count % 60 == 0) {
-      printf("Debug: %zu triangles this frame\n", triangles_rendered);
-    }
-
+    
     // Print TPS and FPS every second
     uint64_t counter_time = SDL_GetPerformanceCounter();
     if ((float)(counter_time - last_counter_time) / (float)SDL_GetPerformanceFrequency() >= 1.0f) {
@@ -189,23 +212,24 @@ int main(int argc, char *argv[]) {
       usize chunk_count = 0;
       get_all_chunks(&scene.chunk_map, chunks, &chunk_count);
       free(chunks);
-
+      
       uint64_t avg_triangles_per_frame = fps_counter > 0 ? triangle_counter / fps_counter : 0;
       printf("TPS: %lu, FPS: %lu, Triangles/frame: %lu, Chunks: %zu\n",
-             tps_counter, fps_counter, avg_triangles_per_frame, chunk_count);
-      tps_counter = 0;
-      fps_counter = 0;
-      triangle_counter = 0;
-      last_counter_time = counter_time;
+        tps_counter, fps_counter, avg_triangles_per_frame, chunk_count);
+        tps_counter = 0;
+        fps_counter = 0;
+        triangle_counter = 0;
+        last_counter_time = counter_time;
+      }
     }
+    
+    free_chunk_map(&scene.chunk_map);
+    
+    SDL_DestroyTexture(framebuffer_tex);
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+    
+    return 0;
   }
   
-  free_chunk_map(&scene.chunk_map);
-
-  SDL_DestroyTexture(framebuffer_tex);
-  SDL_DestroyRenderer(renderer);
-  SDL_DestroyWindow(window);
-  SDL_Quit();
-
-  return 0;
-}
