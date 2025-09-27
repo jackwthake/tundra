@@ -47,4 +47,7 @@ void init_scene(scene_t *scene, usize max_loaded_chunks);
 void update_loaded_chunks(scene_t *scene);
 usize render_loaded_chunks(renderer_t *state, scene_t *scene, light_t *lights, const usize num_lights);
 
+// Implementation found in shaders.c
+void apply_snow_effect(renderer_t *renderer, float time, int width, int height, transform_t *camera);
+
 #endif // SCENE_H

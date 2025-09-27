@@ -5,11 +5,15 @@
 #include <stdio.h>
 #include <limits.h>
 
+#include <SDL3/SDL.h>
 #include <shader-works/renderer.h>
 #include <shader-works/maths.h>
 
-extern fragment_shader_t ground_frag;
+extern fragment_shader_t ground_shadow_frag;
 extern fragment_shader_t tree_frag;
+
+// Function to set scene data for shadow calculations (defined in shaders.c)
+extern void set_shadow_scene(scene_t *scene);
 
 extern int generate_tree(model_t *, float, float, float3, float, usize, const usize, const usize, const usize); // in proc_gen.c
 extern void generate_ground_plane(model_t *, float2, float2, float3);                                           // in proc_gen.c
@@ -32,7 +36,7 @@ static void generate_chunk(chunk_t *chunk, int chunk_x, int chunk_z) {
   float corner_z = world_z;
   
   generate_ground_plane(&chunk->ground_plane, make_float2(CHUNK_SIZE, CHUNK_SIZE), make_float2(1.0f, 1.0f), make_float3(corner_x + HALF_CHUNK_SIZE, 0, corner_z + HALF_CHUNK_SIZE));
-  chunk->ground_plane.frag_shader = &ground_frag;
+  chunk->ground_plane.frag_shader = &ground_shadow_frag;
   
   // Ensure ground plane was generated successfully
   if (chunk->ground_plane.vertex_data == NULL || chunk->ground_plane.num_vertices == 0) {
@@ -64,25 +68,27 @@ static void generate_chunk(chunk_t *chunk, int chunk_x, int chunk_z) {
   }
 }
 
-static usize render_chunk(renderer_t *state, chunk_t *chunk, transform_t *camera, light_t *lights, const usize num_lights) {
+static usize render_chunk(renderer_t *state, chunk_t *chunk, transform_t *camera, light_t *lights, const usize num_lights, scene_t *scene) {
+  (void)scene;
   usize triangles_rendered = 0;
-  
+
   // Only render ground plane if it has valid vertex data
   if (chunk->ground_plane.vertex_data != NULL && chunk->ground_plane.num_vertices > 0) {
     triangles_rendered += render_model(state, camera, &chunk->ground_plane, lights, num_lights);
   }
-  
+
   for (usize i = 0; i < chunk->num_trees; ++i) {
     // Only render tree_trunk if it has valid vertex data
     if (chunk->trees[i].vertex_data != NULL && chunk->trees[i].num_vertices > 0) {
       triangles_rendered += render_model(state, camera, &chunk->trees[i], lights, num_lights);
     }
   }
-  
+
   return triangles_rendered;
 }
 
 void init_scene(scene_t *scene, usize max_loaded_chunks) {
+  (void)max_loaded_chunks;
   if (!scene) return;
   
   scene->controller = (fps_controller_t){
@@ -101,6 +107,7 @@ void init_scene(scene_t *scene, usize max_loaded_chunks) {
 }
 
 bool cull_chunk(chunk_t *chunk, void *param, usize num_params) {
+  (void)num_params;
   if (!chunk || !param) return true;
   
   transform_t *player = (transform_t*)param;
@@ -185,6 +192,9 @@ static int compare_chunks_by_distance(const void *a, const void *b) {
 }
 
 usize render_loaded_chunks(renderer_t *state, scene_t *scene, light_t *lights, const usize num_lights) {
+  // Set up scene data for shadow calculations
+  set_shadow_scene(scene);
+
   chunk_t **chunks = calloc(MAX_CHUNKS, sizeof(chunk_t*));
   usize chunk_count = 0;
   usize total_triangles_rendered = 0;
@@ -223,7 +233,7 @@ usize render_loaded_chunks(renderer_t *state, scene_t *scene, light_t *lights, c
   // Render chunks in sorted order (closest first)
   for (usize i = 0; i < chunk_count; i++) {
     if (sorted_chunks[i].chunk) {
-      total_triangles_rendered += render_chunk(state, sorted_chunks[i].chunk, &scene->camera_pos, lights, num_lights);
+      total_triangles_rendered += render_chunk(state, sorted_chunks[i].chunk, &scene->camera_pos, lights, num_lights, scene);
     }
   }
   

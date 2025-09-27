@@ -2,6 +2,9 @@
 
 #include <assert.h>
 #include <float.h> // FLT_MAX
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 #include <SDL3/SDL.h>
 
@@ -39,7 +42,6 @@ struct state_t {
 
   transform_t camera;
   fps_controller_t controller;
-  float player_yaw; // Player's actual facing direction (independent of camera)
 
   renderer_t renderer;
 
@@ -98,11 +100,10 @@ void update_state(struct state_t *state) {
     if (state->mouse_captured) {
       float mx, my;
       SDL_GetRelativeMouseState(&mx, &my);
-      
-      state->player_yaw += mx * state->controller.mouse_sensitivity;
-      state->camera.yaw = state->player_yaw; // In normal mode, camera follows player yaw
+
+      state->camera.yaw += mx * state->controller.mouse_sensitivity;
       state->camera.pitch -= my * state->controller.mouse_sensitivity;
-      
+
       if (state->camera.pitch < state->controller.min_pitch) state->camera.pitch = state->controller.min_pitch;
       if (state->camera.pitch > state->controller.max_pitch) state->camera.pitch = state->controller.max_pitch;
     }
@@ -118,7 +119,6 @@ void update_state(struct state_t *state) {
 
     state->camera.position.y = target_y + 200.f;
     state->camera.pitch = -PI / 2;
-    state->camera.yaw = state->player_yaw; // Orient camera so player's forward is up on screen
     state->renderer.max_depth = 250;
 
     // Release mouse in overhead mode
@@ -142,6 +142,7 @@ void update_state(struct state_t *state) {
 }
 
 int main(int argc, char const *argv[]) {
+  (void)argc; (void)argv;
   // Initialize basic game state and window
   struct state_t state = { 0 };
 
@@ -150,7 +151,6 @@ int main(int argc, char const *argv[]) {
   state.running = true;
   state.mouse_captured = false;
   state.mode = NORMAL;
-  state.player_yaw = 0.0f;
 
   init_performance_counter(&state.stats);
 
@@ -177,7 +177,7 @@ int main(int argc, char const *argv[]) {
   light_t sun = {
     .is_directional = true,
     .direction = make_float3(1, -1, 1),
-    .color = rgb_to_u32(255, 220, 20)
+    .color = rgb_to_u32(255, 200, 200)
   };
   
   float accumulator = 0.0f;
@@ -224,15 +224,19 @@ int main(int argc, char const *argv[]) {
     }
 
     for(int i = 0; i < WIN_WIDTH * WIN_HEIGHT; ++i) {
-      state.framebuffer[i] = rgb_to_u32(100, 120, 255);
+      state.framebuffer[i] = rgb_to_u32(100, 120, 150);
       state.depth_buffer[i] = FLT_MAX;
     }
 
      // Render at unlimited FPS
     usize triangles_rendered = render_loaded_chunks(&state.renderer, &scene, &sun, 1);
-    
-    if (state.mode != OVERHEAD)
-      apply_fog_to_screen(&state.renderer, 20.f, 30.f, 100, 120, 255);
+
+    // Apply snow effect before fog (only in normal and wireframe modes)
+    if (state.mode != OVERHEAD) {
+      float current_time = (float)(SDL_GetPerformanceCounter()) / (float)SDL_GetPerformanceFrequency();
+      apply_snow_effect(&state.renderer, current_time, WIN_WIDTH, WIN_HEIGHT, &state.camera);
+      apply_fog_to_screen(&state.renderer, 20.f, 30.f, 100, 120, 150);
+    }
     else {
       model_t cube = { 0 };
       float3 pos = make_float3(scene.camera_pos.position.x, scene.controller.ground_height + 3, scene.camera_pos.position.z);
