@@ -1,14 +1,7 @@
-#include <float.h>
-#include <math.h>
-#include <stdbool.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <time.h>
-
 #include <shader-works/renderer.h>
-#include <shader-works/primitives.h>
-#include <shader-works/shaders.h>
-#include <shader-works/maths.h>
+
+#include <assert.h>
+#include <float.h> // FLT_MAX
 
 #include <SDL3/SDL.h>
 
@@ -19,120 +12,179 @@
 #define WIN_SCALE 4
 #define WIN_TITLE "Tundra"
 #define MAX_DEPTH 90
-#define NUM_TREES 15
 
-void update_timing(fps_controller_t *controller) {
-  uint64_t current_time = SDL_GetPerformanceCounter();
-  
-  controller->delta_time = (float)(current_time - controller->last_frame_time) / (float)SDL_GetPerformanceFrequency();
-  controller->last_frame_time = current_time;
-  
-  if (controller->delta_time > 0.1f) controller->delta_time = 0.1f;
+typedef enum {
+  IN_GAME,
+  PAUSED,
+  MAIN_MENU
+} game_phase;
+
+typedef enum {
+  WIREFRAME,
+  OVERHEAD,
+  NORMAL
+} render_mode;
+
+struct performance_counter {
+  uint64_t fps_counter;
+  uint64_t tps_counter;
+  uint64_t triangle_counter;
+  uint64_t last_counter_time;
+};
+
+struct state_t {
+  u32 framebuffer[WIN_WIDTH * WIN_HEIGHT];
+  f32 depth_buffer[WIN_WIDTH * WIN_HEIGHT];
+  render_mode mode;
+
+  transform_t camera;
+  fps_controller_t controller;
+  float player_yaw; // Player's actual facing direction (independent of camera)
+
+  renderer_t renderer;
+
+  SDL_Window *sdl_window;
+  SDL_Renderer *sdl_renderer;
+  SDL_Texture *sdl_framebuffer_tex;
+
+  struct performance_counter stats;
+
+  bool mouse_captured, running;
+};
+
+static const float TICK_RATE = 20.0f; // 20 TPS
+static const float TICK_INTERVAL = 1.0f / TICK_RATE;
+
+static void SDL_library_init(SDL_Window **window, SDL_Renderer **renderer, SDL_Texture **frame_buf) {
+  SDL_Init(SDL_INIT_VIDEO);
+
+  SDL_CreateWindowAndRenderer(WIN_TITLE, WIN_WIDTH * WIN_SCALE, WIN_HEIGHT * WIN_SCALE, 0, window, renderer);
+
+  *frame_buf = SDL_CreateTexture(*renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_STREAMING, WIN_WIDTH, WIN_HEIGHT);
+  SDL_SetTextureScaleMode(*frame_buf, SDL_SCALEMODE_NEAREST);
+
+  SDL_SetWindowRelativeMouseMode(*window, false);
 }
 
-void handle_input(fps_controller_t *controller, transform_t *camera, bool *mouse_captured, bool overhead) {
-  const bool *keys = SDL_GetKeyboardState(NULL);
-  
-  // Mouse input
-  if (*mouse_captured && !overhead) {
-    float mx, my;
-    SDL_GetRelativeMouseState(&mx, &my);
-    
-    camera->yaw += mx * controller->mouse_sensitivity;
-    camera->pitch -= my * controller->mouse_sensitivity;
-    
-    if (camera->pitch < controller->min_pitch) camera->pitch = controller->min_pitch;
-    if (camera->pitch > controller->max_pitch) camera->pitch = controller->max_pitch;
-  }
+static void init_performance_counter(struct performance_counter *stats) {
+  stats->fps_counter = 0;
+  stats->tps_counter = 0;
+  stats->triangle_counter = 0;
+  stats->last_counter_time = SDL_GetPerformanceCounter();
+}
 
-  // Keyboard movement
-  float3 right, up, forward;
-  transform_get_basis_vectors(camera, &right, &up, &forward);
+void update_state(struct state_t *state) {
+  assert(state != NULL);
+
+  const bool *keys = SDL_GetKeyboardState(NULL);
 
   float3 movement = make_float3(0, 0, 0);
-  float speed = controller->move_speed * controller->delta_time;
-  
-  if (keys[SDL_SCANCODE_W] && !overhead) movement = float3_add(movement, float3_scale(forward, -speed));
-  if (keys[SDL_SCANCODE_S] && !overhead) movement = float3_add(movement, float3_scale(forward, speed));
-  if (keys[SDL_SCANCODE_W] && overhead) movement = float3_add(movement, float3_scale(up, -speed));
-  if (keys[SDL_SCANCODE_S] && overhead) movement = float3_add(movement, float3_scale(up, speed));
-  if (keys[SDL_SCANCODE_A]) movement = float3_add(movement, float3_scale(right, speed));
-  if (keys[SDL_SCANCODE_D]) movement = float3_add(movement, float3_scale(right, -speed));
-  
-  camera->position = float3_add(camera->position, movement);
-  float new_ground_height = get_interpolated_terrain_height(camera->position.x, camera->position.z);
-  
-  // Safety check: if terrain height calculation fails or gives extreme values, use previous height
-  if (!isfinite(new_ground_height) || fabsf(new_ground_height - controller->ground_height) > 20.0f) {
-    new_ground_height = controller->ground_height; // Keep previous height
-  }
-  
-  controller->ground_height = new_ground_height;
-  
-  // Use the camera height offset
-  float target_y = controller->ground_height + controller->camera_height_offset;
-  
-  // Prevent sudden drops - limit how much the camera can drop per frame
-  if (target_y < camera->position.y - 10.0f) {
-    target_y = camera->position.y - 10.0f; // Max drop of 10 units per frame
+  float speed = state->controller.move_speed * state->controller.delta_time;
+
+  float3 right, up, forward;
+  transform_get_basis_vectors(&state->camera, &right, &up, &forward);
+
+  float target_y = state->controller.ground_height + state->controller.camera_height_offset;
+
+  if (state->mode == NORMAL || state->mode == WIREFRAME) {
+    if (keys[SDL_SCANCODE_W]) movement = float3_add(movement, float3_scale(forward, -speed));
+    if (keys[SDL_SCANCODE_S]) movement = float3_add(movement, float3_scale(forward, speed));
+    if (keys[SDL_SCANCODE_A]) movement = float3_add(movement, float3_scale(right, speed));
+    if (keys[SDL_SCANCODE_D]) movement = float3_add(movement, float3_scale(right, -speed));
+
+    state->camera.position.y = target_y;
+    state->renderer.max_depth = MAX_DEPTH;
+
+    if (state->mouse_captured) {
+      float mx, my;
+      SDL_GetRelativeMouseState(&mx, &my);
+      
+      state->player_yaw += mx * state->controller.mouse_sensitivity;
+      state->camera.yaw = state->player_yaw; // In normal mode, camera follows player yaw
+      state->camera.pitch -= my * state->controller.mouse_sensitivity;
+      
+      if (state->camera.pitch < state->controller.min_pitch) state->camera.pitch = state->controller.min_pitch;
+      if (state->camera.pitch > state->controller.max_pitch) state->camera.pitch = state->controller.max_pitch;
+    }
+  } else if (state->mode == OVERHEAD) {
+    // In overhead mode, use world axes instead of camera axes
+    float3 world_forward = make_float3(0, 0, -1); // Forward is negative Z (up on screen)
+    float3 world_right = make_float3(1, 0, 0);    // Right is positive X
+
+    if (keys[SDL_SCANCODE_W]) movement = float3_add(movement, float3_scale(world_forward, speed));
+    if (keys[SDL_SCANCODE_S]) movement = float3_add(movement, float3_scale(world_forward, -speed));
+    if (keys[SDL_SCANCODE_A]) movement = float3_add(movement, float3_scale(world_right, speed));
+    if (keys[SDL_SCANCODE_D]) movement = float3_add(movement, float3_scale(world_right, -speed));
+
+    state->camera.position.y = target_y + 200.f;
+    state->camera.pitch = -PI / 2;
+    state->camera.yaw = state->player_yaw; // Orient camera so player's forward is up on screen
+    state->renderer.max_depth = 250;
+
+    // Release mouse in overhead mode
+    if (state->mouse_captured) {
+      state->mouse_captured = false;
+      SDL_SetWindowRelativeMouseMode(state->sdl_window, false);
+    }
   }
 
-  if (!overhead) {
-    camera->position.y = target_y;
+  if (state->mode == WIREFRAME) {
+    state->renderer.wireframe_mode = true;
+  } else {
+    state->renderer.wireframe_mode = false;
   }
+    
+  state->camera.position = float3_add(state->camera.position, movement);
+  float new_ground_height = get_interpolated_terrain_height(state->camera.position.x, state->camera.position.z);
+
+  state->controller.ground_height = new_ground_height;
+  update_camera(&state->renderer, &state->camera);
 }
 
-int main(int argc, char *argv[]) {
-  (void)argc; (void)argv;
-  SDL_Init(SDL_INIT_VIDEO);
-  srand(WORLD_SEED);
-  
-  SDL_Window *window;
-  SDL_Renderer *renderer;
-  SDL_CreateWindowAndRenderer(WIN_TITLE, WIN_WIDTH * WIN_SCALE, WIN_HEIGHT * WIN_SCALE, 0, &window, &renderer);
-  
-  SDL_Texture *framebuffer_tex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_STREAMING, WIN_WIDTH, WIN_HEIGHT);
-  SDL_SetTextureScaleMode(framebuffer_tex, SDL_SCALEMODE_NEAREST);
-  
-  u32 framebuffer[WIN_WIDTH * WIN_HEIGHT];
-  f32 depthbuffer[WIN_WIDTH * WIN_HEIGHT];
-  
-  bool mouse_captured = false;
-  bool running = true;
-  
-  // Fixed timestep variables
-  const float TICK_RATE = 20.0f; // 20 TPS
-  const float TICK_INTERVAL = 1.0f / TICK_RATE;
-  float accumulator = 0.0f;
-  uint64_t last_time = SDL_GetPerformanceCounter();
-  
-  // Performance counters
-  uint64_t fps_counter = 0;
-  uint64_t tps_counter = 0;
-  uint64_t triangle_counter = 0;
-  uint64_t last_counter_time = SDL_GetPerformanceCounter();
-  
-  SDL_SetWindowRelativeMouseMode(window, false);
-  
-  renderer_t renderer_state = {0};
-  init_renderer(&renderer_state, WIN_WIDTH, WIN_HEIGHT, 0, 0, framebuffer, depthbuffer, MAX_DEPTH);
+int main(int argc, char const *argv[]) {
+  // Initialize basic game state and window
+  struct state_t state = { 0 };
+
+  SDL_library_init(&state.sdl_window, &state.sdl_renderer, &state.sdl_framebuffer_tex);
+
+  state.running = true;
+  state.mouse_captured = false;
+  state.mode = NORMAL;
+  state.player_yaw = 0.0f;
+
+  init_performance_counter(&state.stats);
+
+  // Initialize shader-works renderer and scene
+  init_renderer(&state.renderer, WIN_WIDTH, WIN_HEIGHT, 0, 0, state.framebuffer, state.depth_buffer, MAX_DEPTH);
   
   scene_t scene = {0};
   init_scene(&scene, MAX_CHUNKS);
-  
+
+  // Initialize camera position
   float terrain_height = get_interpolated_terrain_height(scene.camera_pos.position.x, scene.camera_pos.position.z);
-  scene.controller.ground_height = terrain_height;
+  state.controller.ground_height = terrain_height;
   float terrain_clearance = fmaxf(3.0f, fabsf(terrain_height) * 0.1f + 2.0f);
   scene.camera_pos.position.y = terrain_height + terrain_clearance;
-  
+  state.camera = scene.camera_pos;
+
+  // Initialize controller settings
+  state.controller.move_speed = 15.0f;
+  state.controller.mouse_sensitivity = 0.002f;
+  state.controller.min_pitch = -PI/2 + 0.1f;
+  state.controller.max_pitch = PI/2 - 0.1f;
+  state.controller.camera_height_offset = terrain_clearance;
+
   light_t sun = {
     .is_directional = true,
     .direction = make_float3(1, -1, 1),
-    .color = rgb_to_u32(255, 225, 255)
+    .color = rgb_to_u32(255, 220, 20)
   };
   
-  bool overhead_mode = false;
-  while (running) {
+  float accumulator = 0.0f;
+  uint64_t last_time = SDL_GetPerformanceCounter();
+
+  // main game loop
+  while (state.running) {
     uint64_t current_time = SDL_GetPerformanceCounter();
     float frame_time = (float)(current_time - last_time) / (float)SDL_GetPerformanceFrequency();
     last_time = current_time;
@@ -141,95 +193,86 @@ int main(int argc, char *argv[]) {
     if (frame_time > 0.1f) frame_time = 0.1f;
     
     accumulator += frame_time;
-    
+
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
-      if (event.type == SDL_EVENT_QUIT) running = false;
+      if (event.type == SDL_EVENT_QUIT) state.running = false;
       if (event.type == SDL_EVENT_KEY_DOWN) {
-        if (event.key.key == SDLK_ESCAPE) {
-          mouse_captured = !mouse_captured;
-          SDL_SetWindowRelativeMouseMode(window, mouse_captured);
-        }
-        
-        if (event.key.key == SDLK_1) {
-          overhead_mode = !overhead_mode;
-        }
-        
-        if (event.key.key == SDLK_2) {
-          renderer_state.wireframe_mode = !renderer_state.wireframe_mode;
-        }
+        if (event.key.key == SDLK_SPACE) {
+          state.mouse_captured = !state.mouse_captured;
+          SDL_SetWindowRelativeMouseMode(state.sdl_window, state.mouse_captured);
+        } else if (event.key.key == SDLK_1)
+          state.mode = NORMAL;
+        else if (event.key.key == SDLK_2)
+          state.mode = OVERHEAD;
+        else if (event.key.key == SDLK_3)
+          state.mode = WIREFRAME;
       }
     }
-    
+
     // Fixed timestep game updates
     while (accumulator >= TICK_INTERVAL) {
-      scene.controller.delta_time = TICK_INTERVAL;
-      handle_input(&scene.controller, &scene.camera_pos, &mouse_captured, overhead_mode);
+      state.controller.delta_time = TICK_INTERVAL;
+      update_state(&state);
+      scene.controller = state.controller;
+      scene.camera_pos = state.camera;
+
       update_loaded_chunks(&scene);
-      
+
       accumulator -= TICK_INTERVAL;
-      tps_counter++;
+      state.stats.tps_counter++;
     }
-    
-    if (overhead_mode) {
-      scene.camera_pos.position.y = 200;
-      scene.camera_pos.pitch = -PI / 2;
-      renderer_state.max_depth = 250;
-    }
-    
-    update_camera(&renderer_state, &scene.camera_pos);
-    
+
     for(int i = 0; i < WIN_WIDTH * WIN_HEIGHT; ++i) {
-      framebuffer[i] = rgb_to_u32(100, 120, 255);
-      depthbuffer[i] = FLT_MAX;
+      state.framebuffer[i] = rgb_to_u32(100, 120, 255);
+      state.depth_buffer[i] = FLT_MAX;
     }
+
+     // Render at unlimited FPS
+    usize triangles_rendered = render_loaded_chunks(&state.renderer, &scene, &sun, 1);
     
-    // Render at unlimited FPS
-    usize triangles_rendered = render_loaded_chunks(&renderer_state, &scene, &sun, 1);
-    
-    if (!overhead_mode)
-      apply_fog_to_screen(&renderer_state, 20.f, 30.f, 100, 120, 255);
+    if (state.mode != OVERHEAD)
+      apply_fog_to_screen(&state.renderer, 20.f, 30.f, 100, 120, 255);
     else {
       model_t cube = { 0 };
       float3 pos = make_float3(scene.camera_pos.position.x, scene.controller.ground_height + 3, scene.camera_pos.position.z);
       generate_cube(&cube, pos, (float3){ 2, 1, 2 });
 
-      render_model(&renderer_state, &scene.camera_pos, &cube, &sun, 1);
+      render_model(&state.renderer, &scene.camera_pos, &cube, &sun, 1);
     }
+
+    SDL_UpdateTexture(state.sdl_framebuffer_tex, NULL, state.framebuffer, WIN_WIDTH * sizeof(u32));
+    SDL_RenderTexture(state.sdl_renderer, state.sdl_framebuffer_tex, NULL, NULL);
+    SDL_RenderPresent(state.sdl_renderer);
     
-    SDL_UpdateTexture(framebuffer_tex, NULL, framebuffer, WIN_WIDTH * sizeof(u32));
-    SDL_RenderTexture(renderer, framebuffer_tex, NULL, NULL);
-    SDL_RenderPresent(renderer);
-    
-    fps_counter++;
-    triangle_counter += triangles_rendered;
-    
+    state.stats.fps_counter++;
+    state.stats.triangle_counter += triangles_rendered;
+
     // Print TPS and FPS every second
     uint64_t counter_time = SDL_GetPerformanceCounter();
-    if ((float)(counter_time - last_counter_time) / (float)SDL_GetPerformanceFrequency() >= 1.0f) {
+    if ((float)(counter_time - state.stats.last_counter_time) / (float)SDL_GetPerformanceFrequency() >= 1.0f) {
       // Calculate chunk count
       chunk_t **chunks = calloc(MAX_CHUNKS, sizeof(chunk_t*));
       usize chunk_count = 0;
       get_all_chunks(&scene.chunk_map, chunks, &chunk_count);
       free(chunks);
       
-      uint64_t avg_triangles_per_frame = fps_counter > 0 ? triangle_counter / fps_counter : 0;
+      uint64_t avg_triangles_per_frame = state.stats.fps_counter > 0 ? state.stats.triangle_counter / state.stats.fps_counter : 0;
       printf("TPS: %lu, FPS: %lu, Triangles/frame: %lu, Chunks: %zu\n",
-        tps_counter, fps_counter, avg_triangles_per_frame, chunk_count);
-        tps_counter = 0;
-        fps_counter = 0;
-        triangle_counter = 0;
-        last_counter_time = counter_time;
-      }
+              state.stats.tps_counter, state.stats.fps_counter, avg_triangles_per_frame, chunk_count);
+      state.stats.tps_counter = 0;
+      state.stats.fps_counter = 0;
+      state.stats.triangle_counter = 0;
+      state.stats.last_counter_time = counter_time;
     }
-    
-    free_chunk_map(&scene.chunk_map);
-    
-    SDL_DestroyTexture(framebuffer_tex);
-    SDL_DestroyRenderer(renderer);
-    SDL_DestroyWindow(window);
-    SDL_Quit();
-    
-    return 0;
   }
+
+  free_chunk_map(&scene.chunk_map);
   
+  SDL_DestroyTexture(state.sdl_framebuffer_tex);
+  SDL_DestroyRenderer(state.sdl_renderer);
+  SDL_DestroyWindow(state.sdl_window);
+  SDL_Quit();
+
+  return 0;
+}
