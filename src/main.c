@@ -18,33 +18,15 @@
 #define WIN_HEIGHT 250
 #define WIN_SCALE 4
 #define WIN_TITLE "Tundra"
-#define MAX_DEPTH 15
-#define NUM_TREES 5
-
-typedef struct {
-  float move_speed;
-  float mouse_sensitivity;
-  float min_pitch, max_pitch;
-  float ground_height;
-  float camera_height_offset;
-  float delta_time;
-  uint64_t last_frame_time;
-} fps_controller_t;
-
-u32 rgb_to_u32(u8 r, u8 g, u8 b) {
-  const SDL_PixelFormatDetails *format = SDL_GetPixelFormatDetails(SDL_PIXELFORMAT_RGBA8888);
-  return SDL_MapRGBA(format, NULL, r, g, b, 255);
-}
-
-void u32_to_rgb(u32 color, u8 *r, u8 *g, u8 *b) {
-  const SDL_PixelFormatDetails *format = SDL_GetPixelFormatDetails(SDL_PIXELFORMAT_RGBA8888);
-  SDL_GetRGB(color, format, NULL, r, g, b);
-}
+#define MAX_DEPTH 90
+#define NUM_TREES 15
 
 void update_timing(fps_controller_t *controller) {
   uint64_t current_time = SDL_GetPerformanceCounter();
+ 
   controller->delta_time = (float)(current_time - controller->last_frame_time) / (float)SDL_GetPerformanceFrequency();
   controller->last_frame_time = current_time;
+
   if (controller->delta_time > 0.1f) controller->delta_time = 0.1f;
 }
 
@@ -55,8 +37,10 @@ void handle_input(fps_controller_t *controller, transform_t *camera, bool *mouse
   if (*mouse_captured) {
     float mx, my;
     SDL_GetRelativeMouseState(&mx, &my);
+    
     camera->yaw += mx * controller->mouse_sensitivity;
     camera->pitch -= my * controller->mouse_sensitivity;
+    
     if (camera->pitch < controller->min_pitch) camera->pitch = controller->min_pitch;
     if (camera->pitch > controller->max_pitch) camera->pitch = controller->max_pitch;
   }
@@ -110,32 +94,33 @@ int main(int argc, char *argv[]) {
   u32 framebuffer[WIN_WIDTH * WIN_HEIGHT];
   f32 depthbuffer[WIN_WIDTH * WIN_HEIGHT];
   
-  fps_controller_t controller = {
-    .move_speed = 8.0f,
-    .mouse_sensitivity = 0.0015f,
-    .min_pitch = -PI/3,
-    .max_pitch = PI/3,
-    .ground_height = 2.0f,
-    .camera_height_offset = 6.0f,
-    .last_frame_time = SDL_GetPerformanceCounter()
-  };
-  
-  transform_t camera = { .position = make_float3(0, 5, 0) };
   bool mouse_captured = false;
   bool running = true;
-  
+
+  // Fixed timestep variables
+  const float TICK_RATE = 20.0f; // 20 TPS
+  const float TICK_INTERVAL = 1.0f / TICK_RATE;
+  float accumulator = 0.0f;
+  uint64_t last_time = SDL_GetPerformanceCounter();
+
+  // Performance counters
+  uint64_t fps_counter = 0;
+  uint64_t tps_counter = 0;
+  uint64_t triangle_counter = 0;
+  uint64_t last_counter_time = SDL_GetPerformanceCounter();
+
   SDL_SetWindowRelativeMouseMode(window, false);
   
   renderer_t renderer_state = {0};
   init_renderer(&renderer_state, WIN_WIDTH, WIN_HEIGHT, 0, 0, framebuffer, depthbuffer, MAX_DEPTH);
-    
-  chunk_t chunk = { 0 };
-  generate_chunk(&chunk, 0.f, 0.f);
-    
-  float terrain_height = get_interpolated_terrain_height(camera.position.x, camera.position.z);
-  controller.ground_height = terrain_height;
+
+  scene_t scene = {0};
+  init_scene(&scene, MAX_CHUNKS);
+
+  float terrain_height = get_interpolated_terrain_height(scene.camera_pos.position.x, scene.camera_pos.position.z);
+  scene.controller.ground_height = terrain_height;
   float terrain_clearance = fmaxf(3.0f, fabsf(terrain_height) * 0.1f + 2.0f);
-  camera.position.y = terrain_height + terrain_clearance;
+  scene.camera_pos.position.y = terrain_height + terrain_clearance;
   
   light_t sun = {
     .is_directional = true,
@@ -144,8 +129,15 @@ int main(int argc, char *argv[]) {
   };
   
   while (running) {
-    update_timing(&controller);
-    
+    uint64_t current_time = SDL_GetPerformanceCounter();
+    float frame_time = (float)(current_time - last_time) / (float)SDL_GetPerformanceFrequency();
+    last_time = current_time;
+
+    // Cap frame time to prevent spiral of death
+    if (frame_time > 0.1f) frame_time = 0.1f;
+
+    accumulator += frame_time;
+
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
       if (event.type == SDL_EVENT_QUIT) running = false;
@@ -154,36 +146,66 @@ int main(int argc, char *argv[]) {
         SDL_SetWindowRelativeMouseMode(window, mouse_captured);
       }
     }
-    
-    handle_input(&controller, &camera, &mouse_captured);
-    update_camera(&renderer_state, &camera);
+
+    // Fixed timestep game updates
+    while (accumulator >= TICK_INTERVAL) {
+      scene.controller.delta_time = TICK_INTERVAL;
+      handle_input(&scene.controller, &scene.camera_pos, &mouse_captured);
+      update_loaded_chunks(&scene);
+
+      accumulator -= TICK_INTERVAL;
+      tps_counter++;
+    }
+
+    update_camera(&renderer_state, &scene.camera_pos);
     
     for(int i = 0; i < WIN_WIDTH * WIN_HEIGHT; ++i) {
       framebuffer[i] = rgb_to_u32(100, 120, 255);
       depthbuffer[i] = FLT_MAX;
     }
-    
-    if (chunk.ground_plane.vertex_data != NULL) {
-      render_chunk(&renderer_state, &chunk, &camera, &sun, 1);
-      
-      if(should_chunk_unload(&camera, &chunk)) {
-        unload_chunk(&chunk);
-      }
-    }
 
+    // Render at unlimited FPS
+    usize triangles_rendered = render_loaded_chunks(&renderer_state, &scene, &sun, 1);
+    apply_fog_to_screen(&renderer_state, 20.f, 30.f, 100, 120, 255);
 
-    // apply_fog_to_screen(&renderer_state, 15.f, 30.f, 100, 120, 255);
-    
     SDL_UpdateTexture(framebuffer_tex, NULL, framebuffer, WIN_WIDTH * sizeof(u32));
     SDL_RenderTexture(renderer, framebuffer_tex, NULL, NULL);
     SDL_RenderPresent(renderer);
+
+    fps_counter++;
+    triangle_counter += triangles_rendered;
+
+    // Debug: print triangles per frame occasionally
+    static int debug_frame_count = 0;
+    if (++debug_frame_count % 60 == 0) {
+      printf("Debug: %zu triangles this frame\n", triangles_rendered);
+    }
+
+    // Print TPS and FPS every second
+    uint64_t counter_time = SDL_GetPerformanceCounter();
+    if ((float)(counter_time - last_counter_time) / (float)SDL_GetPerformanceFrequency() >= 1.0f) {
+      // Calculate chunk count
+      chunk_t **chunks = calloc(MAX_CHUNKS, sizeof(chunk_t*));
+      usize chunk_count = 0;
+      get_all_chunks(&scene.chunk_map, chunks, &chunk_count);
+      free(chunks);
+
+      uint64_t avg_triangles_per_frame = fps_counter > 0 ? triangle_counter / fps_counter : 0;
+      printf("TPS: %lu, FPS: %lu, Triangles/frame: %lu, Chunks: %zu\n",
+             tps_counter, fps_counter, avg_triangles_per_frame, chunk_count);
+      tps_counter = 0;
+      fps_counter = 0;
+      triangle_counter = 0;
+      last_counter_time = counter_time;
+    }
   }
   
-  unload_chunk(&chunk);
-  
+  free_chunk_map(&scene.chunk_map);
+
   SDL_DestroyTexture(framebuffer_tex);
   SDL_DestroyRenderer(renderer);
   SDL_DestroyWindow(window);
   SDL_Quit();
+
   return 0;
 }

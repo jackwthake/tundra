@@ -2,7 +2,7 @@
 
 #include <stdlib.h>
 
-static inline usize get_chunk_hash(usize x, usize z, usize table_size) {
+static inline usize get_chunk_hash(int x, int z, usize table_size) {
   return ((x * 73856093) ^ (z * 19349663)) % table_size;
 }
 
@@ -10,9 +10,14 @@ static void free_chunk_node(chunk_map_node_t *node) {
   if (!node) return;
 
   delete_model(&node->chunk.ground_plane);
-  
+
   for (usize i = 0; i < node->chunk.num_trees; ++i) {
     delete_model(&node->chunk.trees[i]);
+  }
+
+  // Free the trees array itself
+  if (node->chunk.trees) {
+    free(node->chunk.trees);
   }
 
   free(node);
@@ -23,6 +28,8 @@ void init_chunk_map(chunk_map_t *map, usize num_buckets) {
 
   map->num_buckets = num_buckets;
   map->buckets = calloc(num_buckets, sizeof(chunk_map_node_t *));
+
+  map->num_loaded_chunks = 0;
 }
 
 void free_chunk_map(chunk_map_t *map) {
@@ -41,6 +48,7 @@ void free_chunk_map(chunk_map_t *map) {
 
   free(map->buckets);
   map->buckets = NULL;
+  map->num_loaded_chunks = 0;
 }
 
 void insert_chunk(chunk_map_t *map, chunk_t *chunk) {
@@ -57,9 +65,10 @@ void insert_chunk(chunk_map_t *map, chunk_t *chunk) {
   head->next = old_head;
 
   map->buckets[index] = head;
+  ++map->num_loaded_chunks;
 }
 
-void remove_chunk(chunk_map_t *map, usize x, usize z) {
+void remove_chunk(chunk_map_t *map, int x, int z) {
   (void)map; (void)x; (void)z;
   if (!map) return;
 
@@ -75,6 +84,7 @@ void remove_chunk(chunk_map_t *map, usize x, usize z) {
       }
 
       free_chunk_node(head);
+      --map->num_loaded_chunks;
       return;
     }
     
@@ -83,7 +93,37 @@ void remove_chunk(chunk_map_t *map, usize x, usize z) {
   }
 }
 
-chunk_map_node_t *chunk_lookup(chunk_map_t *map, usize x, usize z) {
+void remove_chunk_if(chunk_map_t *map, query_func func, void *param, usize num_params) {
+  (void)map; (void)func; (void)param; (void) num_params;
+  if (!map) return;
+
+  for (usize i = 0; i < map->num_buckets; ++i) {
+    chunk_map_node_t *head = map->buckets[i], *prev = NULL;
+
+    while (head) {
+      chunk_map_node_t *next = head->next; // Store next before potential free
+
+      if (func(&head->chunk, param, num_params)) {
+        if (prev == NULL) {
+          map->buckets[i] = next;
+        } else {
+          prev->next = next;
+        }
+
+        free_chunk_node(head);
+        --map->num_loaded_chunks;
+
+        // Continue with next node instead of returning
+        head = next;
+      } else {
+        prev = head;
+        head = next;
+      }
+    }
+  }
+}
+
+chunk_map_node_t *chunk_lookup(chunk_map_t *map, int x, int z) {
   if (!map) return NULL;
 
   usize index = get_chunk_hash(x, z, map->num_buckets);
@@ -99,13 +139,14 @@ chunk_map_node_t *chunk_lookup(chunk_map_t *map, usize x, usize z) {
   return NULL;
 }
 
-bool is_chunk_loaded(chunk_map_t *map, usize x, usize z) {
-  return chunk_lookup(map, x, z)->loaded;
+bool is_chunk_loaded(chunk_map_t *map, int x, int z) {
+  chunk_map_node_t *node = chunk_lookup(map, x, z);
+  return node ? node->loaded : false;
 }
 
 // used to get all chunks using query_chunk_map
-static inline bool always_true(chunk_t *chunk) {
-  (void)chunk;
+static inline bool always_true(chunk_t *chunk, void *params, usize num_params) {
+  (void)chunk; (void)params; (void)num_params;
   return true;
 }
 
@@ -120,7 +161,7 @@ void query_chunk_map(chunk_map_t *map, chunk_t **chunk_buf, usize *count, query_
   for (usize i = 0; i < map->num_buckets; ++i) {
     chunk_map_node_t *node = map->buckets[i];
     while (node != NULL) {
-      if (node->loaded && func(&node->chunk)) {
+      if (node->loaded && func(&node->chunk, NULL, 0)) {
         chunk_buf[*count] = &node->chunk;
         (*count)++;
       }

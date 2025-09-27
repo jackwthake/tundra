@@ -11,7 +11,7 @@ static inline float smoothstep(float t) {
   return t * t * (3.0f - 2.0f * t);
 }
 
-
+// Map a value from one range to another
 inline float map_range(float value, float old_min, float old_max, float new_min, float new_max) {
   return new_min + (value - old_min) * (new_max - new_min) / (old_max - old_min);
 }
@@ -30,10 +30,10 @@ inline float hash2(int x, int y, int seed) {
 
 // Simple 2D Perlin-like noise (using a hash for gradients) with seed
 float noise2D(float x, float y, int seed) {
-  // Grid coordinates
-  int xi = (int)x;
-  int yi = (int)y;
-  
+  // Grid coordinates - use floor for proper handling of negative coordinates
+  int xi = (int)floorf(x);
+  int yi = (int)floorf(y);
+
   // Fractional parts
   float xf = x - (float)xi;
   float yf = y - (float)yi;
@@ -79,12 +79,44 @@ static float ridgeNoise(float x, float y, int seed) {
 float terrainHeight(float x, float y, int seed) {
   // Base terrain with rolling hills
   float base = fbm(x * 0.01f, y * 0.01f, 6, WORLD_SEED + seed) * 5.0f;
-  
+
   // Add ridges for cliffs
   float ridges = ridgeNoise(x * 0.005f, y * 0.005f, WORLD_SEED) * 3.0f;
-  
+
   // Combine them (don't square ridges - too extreme)
   return base + ridges;
+}
+
+float get_interpolated_terrain_height(float x, float z) {
+  float grid_size = 1.0f; // Sample every 1 unit
+  
+  // Find which grid cell we're in
+  float grid_x = x / grid_size;
+  float grid_z = z / grid_size;
+  
+  // Get integer grid coordinates
+  int gx = (int)floorf(grid_x);
+  int gz = (int)floorf(grid_z);
+  
+  // Get fractional parts for interpolation
+  float fx = grid_x - (float)gx;
+  float fz = grid_z - (float)gz;
+  
+  // Sample terrain height at the four corners of the grid cell
+  float corner_x0 = (float)gx * grid_size;
+  float corner_x1 = (float)(gx + 1) * grid_size;
+  float corner_z0 = (float)gz * grid_size;
+  float corner_z1 = (float)(gz + 1) * grid_size;
+  
+  float h00 = terrainHeight(corner_x0, corner_z0, WORLD_SEED);
+  float h10 = terrainHeight(corner_x1, corner_z0, WORLD_SEED);
+  float h01 = terrainHeight(corner_x0, corner_z1, WORLD_SEED);
+  float h11 = terrainHeight(corner_x1, corner_z1, WORLD_SEED);
+  
+  // Bilinear interpolation
+  float h0 = lerp(h00, h10, fx);
+  float h1 = lerp(h01, h11, fx);
+  return lerp(h0, h1, fz);
 }
 
 // this should append each segment to the model's vertex_data and face_normals
