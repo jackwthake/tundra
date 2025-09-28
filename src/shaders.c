@@ -126,9 +126,9 @@ void set_shadow_scene(scene_t *scene) {
 void apply_snow_effect(renderer_t *renderer, float time, int width, int height, transform_t *camera) {
   if (!renderer || !renderer->framebuffer || !camera) return;
 
-  const int num_particles = 400; // Number of snow particles
-  const float particle_size = 1.5f; // Size of each snow particle in pixels
-  const float snow_area = renderer->max_depth * 0.25f; // Area around camera to generate snow
+  const int num_particles = 500; // Number of snow particles
+  const float particle_size = 2.0f; // Size of each snow particle in pixels
+  const float snow_area = renderer->max_depth * 0.8f; // Area around camera to generate snow
 
   // Get camera position
   float3 cam_pos = camera->position;

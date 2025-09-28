@@ -14,13 +14,7 @@
 #define WIN_HEIGHT 250
 #define WIN_SCALE 4
 #define WIN_TITLE "Tundra"
-#define MAX_DEPTH 90
-
-typedef enum {
-  IN_GAME,
-  PAUSED,
-  MAIN_MENU
-} game_phase;
+#define MAX_DEPTH 40
 
 typedef enum {
   WIREFRAME,
@@ -177,7 +171,7 @@ int main(int argc, char const *argv[]) {
   light_t sun = {
     .is_directional = true,
     .direction = make_float3(1, -1, 1),
-    .color = rgb_to_u32(255, 200, 200)
+    .color = rgb_to_u32(200, 160, 160)
   };
   
   float accumulator = 0.0f;
@@ -198,6 +192,10 @@ int main(int argc, char const *argv[]) {
     while (SDL_PollEvent(&event)) {
       if (event.type == SDL_EVENT_QUIT) state.running = false;
       if (event.type == SDL_EVENT_KEY_DOWN) {
+        if (event.key.key == SDLK_ESCAPE) {
+          state.running = false;
+        } 
+        
         if (event.key.key == SDLK_SPACE) {
           state.mouse_captured = !state.mouse_captured;
           SDL_SetWindowRelativeMouseMode(state.sdl_window, state.mouse_captured);
@@ -224,7 +222,7 @@ int main(int argc, char const *argv[]) {
     }
 
     for(int i = 0; i < WIN_WIDTH * WIN_HEIGHT; ++i) {
-      state.framebuffer[i] = rgb_to_u32(100, 120, 150);
+      state.framebuffer[i] = rgb_to_u32(100, 110, 140);
       state.depth_buffer[i] = FLT_MAX;
     }
 
@@ -235,9 +233,8 @@ int main(int argc, char const *argv[]) {
     if (state.mode != OVERHEAD) {
       float current_time = (float)(SDL_GetPerformanceCounter()) / (float)SDL_GetPerformanceFrequency();
       apply_snow_effect(&state.renderer, current_time, WIN_WIDTH, WIN_HEIGHT, &state.camera);
-      apply_fog_to_screen(&state.renderer, 20.f, 30.f, 100, 120, 150);
-    }
-    else {
+      apply_fog_to_screen(&state.renderer, state.renderer.max_depth / 2.f, state.renderer.max_depth - 1.0f, 100, 110, 140);
+    } else {
       model_t cube = { 0 };
       float3 pos = make_float3(scene.camera_pos.position.x, scene.controller.ground_height + 3, scene.camera_pos.position.z);
       generate_cube(&cube, pos, (float3){ 2, 1, 2 });

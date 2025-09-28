@@ -12,8 +12,17 @@ endif()
 
 # Set basic compiler flags (libraries will use these minimal flags)
 set(CMAKE_C_FLAGS_DEBUG "-g -O0")
-set(CMAKE_C_FLAGS_RELEASE "-O3 -march=native -DNDEBUG")
-set(CMAKE_C_FLAGS_RELWITHDEBINFO "-O3 -march=native -g")
+
+# Use different optimization flags for CI vs local builds
+if(DEFINED ENV{CI})
+    # CI builds: use generic optimization for compatibility
+    set(CMAKE_C_FLAGS_RELEASE "-O3 -DNDEBUG")
+    set(CMAKE_C_FLAGS_RELWITHDEBINFO "-O3 -g")
+else()
+    # Local builds: use native optimization for best performance
+    set(CMAKE_C_FLAGS_RELEASE "-O3 -march=native -DNDEBUG")
+    set(CMAKE_C_FLAGS_RELWITHDEBINFO "-O3 -march=native -g")
+endif()
 
 # Set output directories
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/")
