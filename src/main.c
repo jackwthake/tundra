@@ -10,9 +10,9 @@
 
 #include "scene.h"
 
-#define WIN_WIDTH 400
-#define WIN_HEIGHT 250
-#define WIN_SCALE 4
+#define WIN_WIDTH 200
+#define WIN_HEIGHT 125
+#define WIN_SCALE 8
 #define WIN_TITLE "Tundra"
 #define MAX_DEPTH 40
 
@@ -67,6 +67,70 @@ static void init_performance_counter(struct performance_counter *stats) {
   stats->tps_counter = 0;
   stats->triangle_counter = 0;
   stats->last_counter_time = SDL_GetPerformanceCounter();
+}
+
+static u32 get_sun_color(float time_elapsed) {
+  const float CYCLE_DURATION = 120.0f; // 2 minutes total
+  const float PHASE_DURATION = 30.0f;  // 30 seconds per phase
+
+  float cycle_time = fmodf(time_elapsed, CYCLE_DURATION);
+  float phase = cycle_time / PHASE_DURATION;
+
+  u8 r, g, b;
+
+  if (phase < 1.0f) { // Dawn: deep blue to white
+    float t = phase;
+    r = (u8)(30 + t * 170);   // 30 -> 200
+    g = (u8)(50 + t * 110);   // 50 -> 160
+    b = (u8)(120 + t * 40);   // 120 -> 160
+  } else if (phase < 2.0f) { // Noon: white to light pink
+    float t = phase - 1.0f;
+    r = (u8)(200 + t * 55);   // 200 -> 255
+    g = (u8)(160 - t * 60);   // 160 -> 100
+    b = (u8)(160 - t * 10);   // 160 -> 150
+  } else if (phase < 3.0f) { // Dusk: light pink to dark blue
+    float t = phase - 2.0f;
+    r = (u8)(255 - t * 235);  // 255 -> 20
+    g = (u8)(100 - t * 80);   // 100 -> 20
+    b = (u8)(150 - t * 50);   // 150 -> 100
+  } else { // Midnight: dark blue to deep blue
+    float t = phase - 3.0f;
+    r = (u8)(20 + t * 10);    // 20 -> 30
+    g = (u8)(20 + t * 30);    // 20 -> 50
+    b = (u8)(100 + t * 20);   // 100 -> 120
+  }
+
+  return rgb_to_u32(r, g, b);
+}
+
+static void get_fog_color(float time_elapsed, u8 *r, u8 *g, u8 *b) {
+  const float CYCLE_DURATION = 120.0f; // 2 minutes total
+  const float PHASE_DURATION = 30.0f;  // 30 seconds per phase
+
+  float cycle_time = fmodf(time_elapsed, CYCLE_DURATION);
+  float phase = cycle_time / PHASE_DURATION;
+
+  if (phase < 1.0f) { // Dawn: rich deep blue to almost white with sky blue
+    float t = phase;
+    *r = (u8)(20 + t * 220);   // 20 -> 240
+    *g = (u8)(30 + t * 215);   // 30 -> 245
+    *b = (u8)(80 + t * 170);   // 80 -> 250
+  } else if (phase < 2.0f) { // Noon: almost white to pastel orange/red
+    float t = phase - 1.0f;
+    *r = (u8)(240 + t * 15);   // 240 -> 255
+    *g = (u8)(245 - t * 95);   // 245 -> 150
+    *b = (u8)(250 - t * 170);  // 250 -> 80
+  } else if (phase < 3.0f) { // Dusk: pastel orange/red to black
+    float t = phase - 2.0f;
+    *r = (u8)(255 - t * 255);  // 255 -> 0
+    *g = (u8)(150 - t * 150);  // 150 -> 0
+    *b = (u8)(80 - t * 80);    // 80 -> 0
+  } else { // Midnight: black to rich deep blue
+    float t = phase - 3.0f;
+    *r = (u8)(0 + t * 20);     // 0 -> 20
+    *g = (u8)(0 + t * 30);     // 0 -> 30
+    *b = (u8)(0 + t * 80);     // 0 -> 80
+  }
 }
 
 void update_state(struct state_t *state) {
@@ -173,8 +237,9 @@ int main(int argc, char const *argv[]) {
     .direction = make_float3(1, -1, 1),
     .color = rgb_to_u32(200, 160, 160)
   };
-  
+
   float accumulator = 0.0f;
+  float total_time = 0.0f;
   uint64_t last_time = SDL_GetPerformanceCounter();
 
   // main game loop
@@ -182,11 +247,15 @@ int main(int argc, char const *argv[]) {
     uint64_t current_time = SDL_GetPerformanceCounter();
     float frame_time = (float)(current_time - last_time) / (float)SDL_GetPerformanceFrequency();
     last_time = current_time;
-    
+
     // Cap frame time to prevent spiral of death
     if (frame_time > 0.1f) frame_time = 0.1f;
-    
+
     accumulator += frame_time;
+    total_time += frame_time;
+
+    // Update sun color based on day/night cycle
+    sun.color = get_sun_color(total_time);
 
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
@@ -221,19 +290,27 @@ int main(int argc, char const *argv[]) {
       state.stats.tps_counter++;
     }
 
+    u8 bg_r, bg_g, bg_b;
+    get_fog_color(total_time, &bg_r, &bg_g, &bg_b);
+    u32 background_color = rgb_to_u32(bg_r, bg_g, bg_b);
+
     for(int i = 0; i < WIN_WIDTH * WIN_HEIGHT; ++i) {
-      state.framebuffer[i] = rgb_to_u32(100, 110, 140);
+      state.framebuffer[i] = background_color;
       state.depth_buffer[i] = FLT_MAX;
     }
 
      // Render at unlimited FPS
     usize triangles_rendered = render_loaded_chunks(&state.renderer, &scene, &sun, 1);
 
-    // Apply snow effect before fog (only in normal and wireframe modes)
+    // Update and render falling particles
+    update_quads(scene.camera_pos.position, &scene.camera_pos);
+    usize quad_triangles = render_quads(&state.renderer, &scene.camera_pos, &sun, 1);
+    triangles_rendered += quad_triangles;
+
     if (state.mode != OVERHEAD) {
-      float current_time = (float)(SDL_GetPerformanceCounter()) / (float)SDL_GetPerformanceFrequency();
-      apply_snow_effect(&state.renderer, current_time, WIN_WIDTH, WIN_HEIGHT, &state.camera);
-      apply_fog_to_screen(&state.renderer, state.renderer.max_depth / 2.f, state.renderer.max_depth - 1.0f, 100, 110, 140);
+      u8 fog_r, fog_g, fog_b;
+      get_fog_color(total_time, &fog_r, &fog_g, &fog_b);
+      apply_fog_to_screen(&state.renderer, state.renderer.max_depth / 2.f, state.renderer.max_depth - 1.0f, fog_r, fog_g, fog_b);
     } else {
       model_t cube = { 0 };
       float3 pos = make_float3(scene.camera_pos.position.x, scene.controller.ground_height + 3, scene.camera_pos.position.z);
@@ -259,8 +336,9 @@ int main(int argc, char const *argv[]) {
       free(chunks);
       
       uint64_t avg_triangles_per_frame = state.stats.fps_counter > 0 ? state.stats.triangle_counter / state.stats.fps_counter : 0;
-      printf("TPS: %lu, FPS: %lu, Triangles/frame: %lu, Chunks: %zu\n",
-              state.stats.tps_counter, state.stats.fps_counter, avg_triangles_per_frame, chunk_count);
+      printf("TPS: %lu, FPS: %lu, Triangles/frame: %lu, Chunks: %zu, Player: (%.1f, %.1f, %.1f)\n",
+              state.stats.tps_counter, state.stats.fps_counter, avg_triangles_per_frame, chunk_count,
+              scene.camera_pos.position.x, scene.camera_pos.position.y, scene.camera_pos.position.z);
       state.stats.tps_counter = 0;
       state.stats.fps_counter = 0;
       state.stats.triangle_counter = 0;

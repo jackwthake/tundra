@@ -39,6 +39,7 @@ extern float lerp(float a, float b, float t);
 extern float hash2(int x, int y, int seed);
 
 extern float noise2D(float x, float y, int seed);
+extern float ridgeNoise(float x, float y, int seed);
 extern float terrainHeight(float x, float y, int seed);
 extern float get_interpolated_terrain_height(float x, float z);
 
@@ -48,6 +49,8 @@ void update_loaded_chunks(scene_t *scene);
 usize render_loaded_chunks(renderer_t *state, scene_t *scene, light_t *lights, const usize num_lights);
 
 // Implementation found in shaders.c
-void apply_snow_effect(renderer_t *renderer, float time, int width, int height, transform_t *camera);
+void update_quads(float3 player_pos, transform_t *camera_transform);
+usize render_quads(renderer_t *renderer, transform_t *camera, light_t *lights, usize num_lights);
+
 
 #endif // SCENE_H

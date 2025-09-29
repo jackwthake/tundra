@@ -3,6 +3,8 @@
 #include <SDL3/SDL.h>
 #include <math.h>
 #include <stdbool.h>
+#include <stdlib.h>
+#include <stdio.h>
 #include "scene.h"
 #include "chunk_map.h"
 
@@ -14,6 +16,10 @@ u32 rgb_to_u32(u8 r, u8 g, u8 b) {
 void u32_to_rgb(u32 color, u8 *r, u8 *g, u8 *b) {
   const SDL_PixelFormatDetails *format = SDL_GetPixelFormatDetails(SDL_PIXELFORMAT_RGBA8888);
   SDL_GetRGB(color, format, NULL, r, g, b);
+}
+
+static float rand_float(void) {
+  return (float)rand() / RAND_MAX;
 }
 
 u32 tree_frag_func(u32 input, fragment_context_t *ctx, void *args, usize argc) {
@@ -54,8 +60,8 @@ static bool point_in_tree_shadow(float3 world_pos, scene_t *scene) {
         // Recalculate tree position using same method as generation
         float world_x = chunk_x * CHUNK_SIZE;
         float world_z = chunk_z * CHUNK_SIZE;
-        float tree_x = map_range(hash2(i, i % 3, WORLD_SEED), -1.0f, 1.0f, world_x - (HALF_CHUNK_SIZE - 2), world_x + (HALF_CHUNK_SIZE - 2));
-        float tree_z = map_range(hash2(i % 3, i, WORLD_SEED), -1.0f, 1.0f, world_z - (HALF_CHUNK_SIZE - 2), world_z + (HALF_CHUNK_SIZE - 2));
+        float tree_x = map_range(hash2(chunk_x * 100 + i, chunk_z * 100 + i * 3, WORLD_SEED), -1.0f, 1.0f, world_x + 2, world_x + CHUNK_SIZE - 2);
+        float tree_z = map_range(hash2(chunk_z * 100 + i * 7, chunk_x * 100 + i * 5, WORLD_SEED), -1.0f, 1.0f, world_z + 2, world_z + CHUNK_SIZE - 2);
 
         // Simple circular shadow check
         float tree_dx = world_pos.x - tree_x;
@@ -76,18 +82,90 @@ static bool point_in_tree_shadow(float3 world_pos, scene_t *scene) {
 u32 ground_shadow_func(u32 input, fragment_context_t *ctx, void *args, usize argc) {
   (void)input;
 
-  // Generate normal ground color
-  float check_size = 0.05f;
-  float x = floorf(ctx->world_pos.x / check_size);
-  float z = floorf(ctx->world_pos.z / check_size);
+  // Get the actual terrain height at this world position
+  float terrain_height = get_interpolated_terrain_height(ctx->world_pos.x, ctx->world_pos.z);
 
-  float intensity = map_range(noise2D(x, z, WORLD_SEED), -1.0f, 1.0f, 0.85f, 1.0f);
+  u32 base_color;
 
-  u8 r = (u8)(255.f * intensity);
-  u8 g = (u8)(255.f * intensity);
-  u8 b = (u8)(255.f * intensity);
+  // Frozen lake ice texture
+  if (terrain_height <= 0.01f) {
+    // Ice surface variation
+    float ice_variation = ridgeNoise(ctx->world_pos.x * 0.1f, ctx->world_pos.z * 0.1f, WORLD_SEED + 100);
+    ice_variation = map_range(ice_variation, 0.0f, 1.0f, 0.4f, 1.6f);
 
-  u32 base_color = rgb_to_u32(r, g, b);
+    // Crack detection using gradient edge detection
+    float crack_freq = 0.6f;
+    float crack_sample_offset = 0.1f;
+
+    // Primary crack layer
+    float crack1 = ridgeNoise(ctx->world_pos.x * crack_freq, ctx->world_pos.z * crack_freq, WORLD_SEED + 200);
+    float crack1_x = ridgeNoise((ctx->world_pos.x + crack_sample_offset) * crack_freq, ctx->world_pos.z * crack_freq, WORLD_SEED + 200);
+    float crack1_z = ridgeNoise(ctx->world_pos.x * crack_freq, (ctx->world_pos.z + crack_sample_offset) * crack_freq, WORLD_SEED + 200);
+
+    // Secondary crack layer
+    float crack2_freq = crack_freq * 0.7f;
+    float crack2 = ridgeNoise(ctx->world_pos.x * crack2_freq, ctx->world_pos.z * crack2_freq, WORLD_SEED + 300);
+    float crack2_x = ridgeNoise((ctx->world_pos.x + crack_sample_offset) * crack2_freq, ctx->world_pos.z * crack2_freq, WORLD_SEED + 300);
+    float crack2_z = ridgeNoise(ctx->world_pos.x * crack2_freq, (ctx->world_pos.z + crack_sample_offset) * crack2_freq, WORLD_SEED + 300);
+
+    // Calculate crack edges from gradients
+    float edge1 = fabsf(crack1_x - crack1) + fabsf(crack1_z - crack1);
+    float edge2 = fabsf(crack2_x - crack2) + fabsf(crack2_z - crack2);
+    float crack_strength = (fmaxf(edge1, edge2) > 0.15f) ? 3.0f : 1.0f;
+
+    // Apply ice color with crack brightening
+    float r = 45.0f * ice_variation * crack_strength;
+    float g = 65.0f * ice_variation * crack_strength;
+    float b = 120.0f * ice_variation * crack_strength;
+
+    base_color = rgb_to_u32(
+      (u8)(r > 255.0f ? 255 : (r < 0 ? 0 : r)),
+      (u8)(g > 255.0f ? 255 : (g < 0 ? 0 : g)),
+      (u8)(b > 255.0f ? 255 : (b < 0 ? 0 : b))
+    );
+  }
+  // Shore gravel texture
+  else if (terrain_height <= 0.3f) {
+    // Pixelated gravel coordinates
+    float gravel_x = floorf(ctx->world_pos.x / 0.15f);
+    float gravel_z = floorf(ctx->world_pos.z / 0.15f);
+
+    // Gravel base color and texture
+    float gravel_base = noise2D(gravel_x, gravel_z, WORLD_SEED + 500);
+    float gravel_ridge = ridgeNoise(gravel_x * 0.7f, gravel_z * 0.7f, WORLD_SEED + 600);
+    float gravel_intensity = map_range(gravel_base, -1.0f, 1.0f, 0.5f, 1.3f) + gravel_ridge * 0.4f;
+
+    // White stone chance (15%)
+    float stone_chance = map_range(hash2((int)gravel_x, (int)gravel_z, WORLD_SEED + 700), -1.0f, 1.0f, 0.0f, 1.0f);
+
+    if (stone_chance > 0.85f) {
+      // White stones
+      float white_brightness = map_range(stone_chance, 0.85f, 1.0f, 176.0f, 225.0f);
+      base_color = rgb_to_u32((u8)white_brightness, (u8)white_brightness, (u8)(white_brightness + 5));
+    } else {
+      // Gray gravel
+      float gray = 60.0f * gravel_intensity;
+      base_color = rgb_to_u32(
+        (u8)(gray > 255.0f ? 255 : (gray < 0 ? 0 : gray)),
+        (u8)(gray > 255.0f ? 255 : (gray < 0 ? 0 : gray)),
+        (u8)((gray + 10.0f) > 255.0f ? 255 : ((gray + 10.0f) < 0 ? 0 : (gray + 10.0f)))
+      );
+    }
+  }
+  else {
+    // Generate normal ground color for higher terrain
+    float check_size = 0.05f;
+    float x = floorf(ctx->world_pos.x / check_size);
+    float z = floorf(ctx->world_pos.z / check_size);
+
+    float intensity = map_range(noise2D(x, z, WORLD_SEED), -1.0f, 1.0f, 0.85f, 1.0f);
+
+    u8 r = (u8)(255.f * intensity);
+    u8 g = (u8)(255.f * intensity);
+    u8 b = (u8)(255.f * intensity);
+    base_color = rgb_to_u32(r, g, b);
+  }
+
   u32 lit_color = default_lighting_frag_shader.func(base_color, ctx, NULL, 0);
 
   // Apply tree shadows if scene data is available
@@ -111,8 +189,35 @@ u32 ground_shadow_func(u32 input, fragment_context_t *ctx, void *args, usize arg
 // Global scene pointer for shadow calculations
 static scene_t *g_scene_for_shadows = NULL;
 
+
+// White fragment shader for quads
+u32 white_frag_func(u32 input, fragment_context_t *ctx, void *args, usize argc) {
+  (void)input; (void)ctx; (void)args; (void)argc;
+  return rgb_to_u32(255, 255, 255);
+}
+
+// Billboard vertex shader for camera-facing quads
+float3 billboard_vertex_shader(vertex_context_t *context, void *argv, usize argc) {
+  (void)argv; (void)argc;
+
+  float3 vertex = context->original_vertex;
+  float3 cam_right = context->cam_right;
+  float3 cam_up = context->cam_up;
+
+  // Create billboard using camera vectors in model space
+  // The model transform will later position this at the particle's world location
+  float3 model_pos = float3_add(
+    float3_scale(cam_right, vertex.x),
+    float3_scale(cam_up, vertex.y)
+  );
+
+  return model_pos;
+}
+
 fragment_shader_t ground_shadow_frag = { .func = ground_shadow_func, .argv = NULL, .argc = 0, .valid = true };
 fragment_shader_t tree_frag = { .func = tree_frag_func, .argv = NULL, .argc = 0, .valid = true};
+fragment_shader_t white_frag = { .func = white_frag_func, .argv = NULL, .argc = 0, .valid = true};
+vertex_shader_t billboard_vs = { .func = billboard_vertex_shader, .argv = NULL, .argc = 0, .valid = true};
 
 // Function to set the scene data for shadow calculations
 void set_shadow_scene(scene_t *scene) {
@@ -122,90 +227,140 @@ void set_shadow_scene(scene_t *scene) {
   ground_shadow_frag.argc = sizeof(scene_t);
 }
 
-// Snow particle 3D world-space effect
-void apply_snow_effect(renderer_t *renderer, float time, int width, int height, transform_t *camera) {
-  if (!renderer || !renderer->framebuffer || !camera) return;
+// Falling particle system constants
+#define MAX_PARTICLES 300
+#define MIN_DISTANCE -8.0f
+#define MAX_DISTANCE 50.0f
+#define UPDATE_DISTANCE 45.0f  // Stop updating particles beyond this distance
+#define SPAWN_HEIGHT_MIN_OFFSET 25.0f
+#define SPAWN_HEIGHT_MAX_OFFSET 40.0f
+#define FALL_SPEED_MIN 13.0f
+#define FALL_SPEED_MAX 20.0f
+#define SWAY_SPEED_MIN 0.5f
+#define SWAY_SPEED_MAX 5.5f
+#define SWAY_AMPLITUDE 0.75f
+#define QUAD_SIZE 0.2f
+#define SPAWN_INTERVAL 0.05f
+#define FRAME_TIME 0.016f
 
-  const int num_particles = 500; // Number of snow particles
-  const float particle_size = 2.0f; // Size of each snow particle in pixels
-  const float snow_area = renderer->max_depth * 0.8f; // Area around camera to generate snow
+typedef struct {
+  model_t model;
+  float3 velocity;
+  float sway_time;
+  float sway_speed;
+  bool active;
+} falling_particle_t;
 
-  // Get camera position
-  float3 cam_pos = camera->position;
+static falling_particle_t particles[MAX_PARTICLES];
+static bool particles_initialized = false;
 
-  for (int i = 0; i < num_particles; i++) {
-    // Use hash functions for deterministic particle positions relative to camera
-    float hash_x = hash2(i, 12345, WORLD_SEED);
-    float hash_z = hash2(i * 7, 54321, WORLD_SEED);
-    float hash_y_offset = hash2(i * 13, 98765, WORLD_SEED);
-    float hash_speed = hash2(i * 19, 11111, WORLD_SEED);
+static void init_particles(void) {
+  for (int i = 0; i < MAX_PARTICLES; i++) {
+    particles[i].model = (model_t){0};
+    particles[i].velocity = make_float3(0, 0, 0);
+    particles[i].sway_time = 0.0f;
+    particles[i].sway_speed = 0.0f;
+    particles[i].active = false;
+  }
+  particles_initialized = true;
+}
 
-    // Generate world position around camera
-    float world_x = cam_pos.x + map_range(hash_x, -1.0f, 1.0f, -snow_area, snow_area);
-    float world_z = cam_pos.z + map_range(hash_z, -1.0f, 1.0f, -snow_area, snow_area);
+static bool is_particle_in_range(float3 particle_pos, float3 center_pos, float radius) {
+  float dx = particle_pos.x - center_pos.x;
+  float dz = particle_pos.z - center_pos.z;
+  return (dx * dx + dz * dz) <= (radius * radius);
+}
 
-    // Falling animation with different speeds (downward)
-    float fall_speed = map_range(hash_speed, -1.0f, 1.0f, 5.0f, 12.0f);
-    float y_offset = map_range(hash_y_offset, -1.0f, 1.0f, 0.0f, 40.0f);
+static float3 generate_spawn_position(float3 center, float radius) {
+  float angle = rand_float() * 2.0f * M_PI;
+  float distance = radius * sqrtf(rand_float());
 
-    // Particles fall from above camera to below camera, then wrap
-    float total_fall_height = 80.0f; // Total height range
-    float fall_progress = fmodf(time * fall_speed + y_offset, total_fall_height);
-    float world_y = cam_pos.y - 40.0f + fall_progress;
+  float dx = distance * cosf(angle);
+  float dz = distance * sinf(angle);
+  float height_offset = SPAWN_HEIGHT_MIN_OFFSET * (1.0f - distance / MAX_DISTANCE);
 
-    // Skip if particle is too far below camera (shouldn't happen with wrap-around)
-    if (world_y < cam_pos.y - 60.0f) continue;
+  return make_float3(center.x + dx, center.y + height_offset, center.z + dz);
+}
 
-    // Create 3D position
-    float3 world_pos = make_float3(world_x, world_y, world_z);
+static void spawn_particle(int index, float3 player_pos, transform_t *camera_transform) {
+  (void)camera_transform;
 
-    // Project to screen space using renderer's camera matrices
-    float3 relative_pos = float3_sub(world_pos, cam_pos);
+  float3 position = generate_spawn_position(player_pos, MAX_DISTANCE);
 
-    // Transform relative to camera space
-    float3 cam_right = renderer->cam_right;
-    float3 cam_up = renderer->cam_up;
-    float3 cam_forward = renderer->cam_forward;
+  generate_quad(&particles[index].model, (float2){QUAD_SIZE, QUAD_SIZE}, position);
+  particles[index].model.frag_shader = &white_frag;
+  particles[index].model.vertex_shader = &billboard_vs;
+  particles[index].model.disable_behind_camera_culling = true;
 
-    float cam_x = float3_dot(relative_pos, cam_right);
-    float cam_y = float3_dot(relative_pos, cam_up);
-    float cam_z = float3_dot(relative_pos, cam_forward);
+  float fall_speed = FALL_SPEED_MIN + rand_float() * (FALL_SPEED_MAX - FALL_SPEED_MIN);
+  particles[index].velocity = make_float3(0, -fall_speed, 0);
+  particles[index].sway_time = 0.0f;
+  particles[index].sway_speed = SWAY_SPEED_MIN + rand_float() * (SWAY_SPEED_MAX - SWAY_SPEED_MIN);
+  particles[index].active = true;
+}
 
-    // Skip if behind camera
-    if (cam_z <= 0.1f) continue;
+void update_quads(float3 player_pos, transform_t *camera_transform) {
+  if (!particles_initialized) {
+    init_particles();
+    for (int i = 0; i < MAX_PARTICLES / 2; i++) {
+      spawn_particle(i, player_pos, camera_transform);
+    }
+    return;
+  }
 
-    // Project to screen coordinates
-    float screen_x = (cam_x * renderer->projection_scale / cam_z) + (float)width * 0.5f;
-    float screen_y = (cam_y * renderer->projection_scale / cam_z) + (float)height * 0.5f;
+  static float spawn_timer = 0.0f;
+  spawn_timer += FRAME_TIME;
 
-    // Skip if outside screen bounds
-    if (screen_x < 0 || screen_x >= width || screen_y < 0 || screen_y >= height) continue;
+  for (int i = 0; i < MAX_PARTICLES; i++) {
+    if (!particles[i].active) continue;
 
-    // Calculate depth for depth testing
-    float depth = cam_z;
+    if (!is_particle_in_range(particles[i].model.transform.position, player_pos, MAX_DISTANCE)) {
+      particles[i].active = false;
+      continue;
+    }
 
-    // Calculate particle position
-    int px = (int)screen_x;
-    int py = (int)screen_y;
+    if (!is_particle_in_range(particles[i].model.transform.position, player_pos, UPDATE_DISTANCE)) {
+      continue;
+    }
 
-    // Draw particle as a small square
-    for (int dy = 0; dy < (int)particle_size; dy++) {
-      for (int dx = 0; dx < (int)particle_size; dx++) {
-        int x = px + dx;
-        int y = py + dy;
+    particles[i].sway_time += particles[i].sway_speed * FRAME_TIME;
+    float sway_offset = sinf(particles[i].sway_time) * SWAY_AMPLITUDE * FRAME_TIME;
 
-        // Bounds check
-        if (x >= 0 && x < width && y >= 0 && y < height) {
-          int index = y * width + x;
+    particles[i].model.transform.position.y += particles[i].velocity.y * FRAME_TIME;
+    particles[i].model.transform.position.x += sway_offset;
 
-          // Only draw if particle is in front of existing geometry
-          if (renderer->depthbuffer[index] > depth) {
-            // White snow particle
-            renderer->framebuffer[index] = rgb_to_u32(255, 255, 255);
-            renderer->depthbuffer[index] = depth;
-          }
-        }
-      }
+    float ground_height = get_interpolated_terrain_height(
+      particles[i].model.transform.position.x,
+      particles[i].model.transform.position.z
+    );
+
+    if (particles[i].model.transform.position.y <= ground_height + 0.5f) {
+      spawn_particle(i, player_pos, camera_transform);
     }
   }
+
+  if (spawn_timer > SPAWN_INTERVAL) {
+    for (int i = 0; i < MAX_PARTICLES; i++) {
+      if (!particles[i].active) {
+        spawn_particle(i, player_pos, camera_transform);
+        break;
+      }
+    }
+    spawn_timer = 0.0f;
+  }
 }
+
+usize render_quads(renderer_t *renderer, transform_t *camera, light_t *lights, usize num_lights) {
+  usize total_triangles = 0;
+
+  for (int i = 0; i < MAX_PARTICLES; i++) {
+    if (particles[i].active && particles[i].model.vertex_data) {
+      usize triangles = render_model(renderer, camera, &particles[i].model, lights, num_lights);
+      total_triangles += triangles;
+    }
+  }
+
+  return total_triangles;
+}
+
+

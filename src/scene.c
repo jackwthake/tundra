@@ -44,45 +44,86 @@ static void generate_chunk(chunk_t *chunk, int chunk_x, int chunk_z) {
     generate_ground_plane(&chunk->ground_plane, make_float2(CHUNK_SIZE, CHUNK_SIZE), make_float2(1.0f, 1.0f), make_float3(corner_x + HALF_CHUNK_SIZE, 0, corner_z + HALF_CHUNK_SIZE));
   }
   
-  chunk->num_trees = map_range(hash2(world_x, world_z, WORLD_SEED), -1.0f, 1.0f, 0, 7);
+  chunk->num_trees = map_range(hash2(chunk_x, chunk_z, WORLD_SEED), -1.0f, 1.0f, 0, 7);
   chunk->trees = calloc(chunk->num_trees, sizeof(model_t));
   
   for (usize i = 0; i < chunk->num_trees; ++i) {
-    // Random position within terrain bounds
-    float tree_x = map_range(hash2(i, i % 3, WORLD_SEED), -1.0f, 1.0f, world_x - (HALF_CHUNK_SIZE - 2), world_x + (HALF_CHUNK_SIZE - 2));
-    float tree_z = map_range(hash2(i % 3, i, WORLD_SEED), -1.0f, 1.0f, world_z - (HALF_CHUNK_SIZE - 2), world_z + (HALF_CHUNK_SIZE - 2));
-    float tree_y = terrainHeight(world_x, world_z, WORLD_SEED) - 0.5f;
-    
+    // Random position within chunk bounds - use chunk coordinates in hash for uniqueness
+    float tree_x = map_range(hash2(chunk_x * 100 + i, chunk_z * 100 + i * 3, WORLD_SEED), -1.0f, 1.0f, world_x + 2, world_x + CHUNK_SIZE - 2);
+    float tree_z = map_range(hash2(chunk_z * 100 + i * 7, chunk_x * 100 + i * 5, WORLD_SEED), -1.0f, 1.0f, world_z + 2, world_z + CHUNK_SIZE - 2);
+    float tree_y = terrainHeight(tree_x, tree_z, WORLD_SEED) - 0.5f; // Use actual tree position for height
+
+    // Skip tree generation if on frozen lake (at minimum height)
+    if (tree_y <= 0.0f + 0.1f) { // Small threshold to account for floating point precision
+      continue; // Skip this tree, don't generate it
+    }
+
     float3 tree_pos = make_float3(tree_x, tree_y, tree_z);
-    
-    // Bigger trees with more branches
+
+    // Calculate distance from origin for LOD (this is fine for distance-based LOD)
+    float chunk_center_x = world_x + HALF_CHUNK_SIZE;
+    float chunk_center_z = world_z + HALF_CHUNK_SIZE;
+    float distance_to_chunk = sqrtf((chunk_center_x * chunk_center_x) + (chunk_center_z * chunk_center_z));
+
+    // Level of Detail: reduce complexity based on distance
+    float lod_factor = 1.0f;
+    usize segments = 5;  // Increased from 4 for better visual quality
+    if (distance_to_chunk > 100.0f) {
+      lod_factor = 0.5f;  // Less aggressive reduction for distant trees
+      segments = 4;
+    } else if (distance_to_chunk > 50.0f) {
+      lod_factor = 0.7f;  // Less aggressive reduction for mid-distance trees
+      segments = 4;
+    }
+
+    // Better balance between performance and visual quality
     float base_radius = map_range(hash2(tree_pos.x, tree_pos.z, WORLD_SEED), -1.0f, 1.0f, 0.4f, 0.55f);
     float base_angle = map_range(hash2(tree_pos.x, tree_pos.z, WORLD_SEED), -1.0f, 1.0f, 0.0f, 2.0f * PI);
-    float branch_chance = map_range(hash2(tree_pos.x, tree_pos.z, WORLD_SEED), -1.0f, 1.0f, 0.8, 0.9);
-    usize max_branches = map_range(hash2(tree_pos.x, tree_pos.z, WORLD_SEED), -1.0f, 1.0f, 5.f, 10.f);
-    usize num_levels = map_range(hash2(tree_pos.x, tree_pos.z, WORLD_SEED), -1.0f, 1.0f, 5.f, 7.f);
-    
+
+    // Higher minimum branch chance to ensure fuller trees
+    float branch_chance = map_range(hash2(tree_pos.x, tree_pos.z, WORLD_SEED), -1.0f, 1.0f, 0.85 * lod_factor, 0.95 * lod_factor);
+    usize max_branches = (usize)map_range(hash2(tree_pos.x, tree_pos.z, WORLD_SEED), -1.0f, 1.0f, 4.f * lod_factor, 6.f * lod_factor);
+    usize num_levels = (usize)map_range(hash2(tree_pos.x, tree_pos.z, WORLD_SEED), -1.0f, 1.0f, 4.f * lod_factor, 5.f * lod_factor);
+
+    // Ensure minimum values for decent-looking trees - higher minimums for fuller trees
+    if (max_branches < 3) max_branches = 3;
+    if (num_levels < 4) num_levels = 4;
+    if (branch_chance < 0.75) branch_chance = 0.75;
+
     chunk->trees[i].frag_shader = &tree_frag;
-    
-    generate_tree(&(chunk->trees[i]), base_radius, base_angle, tree_pos, branch_chance, 0, max_branches, num_levels, 6);
+
+    generate_tree(&(chunk->trees[i]), base_radius, base_angle, tree_pos, branch_chance, 0, max_branches, num_levels, segments);
   }
 }
 
 static usize render_chunk(renderer_t *state, chunk_t *chunk, transform_t *camera, light_t *lights, const usize num_lights, scene_t *scene) {
   (void)scene;
   usize triangles_rendered = 0;
+  usize ground_triangles = 0;
+  usize tree_triangles = 0;
 
   // Only render ground plane if it has valid vertex data
   if (chunk->ground_plane.vertex_data != NULL && chunk->ground_plane.num_vertices > 0) {
-    triangles_rendered += render_model(state, camera, &chunk->ground_plane, lights, num_lights);
+    ground_triangles = render_model(state, camera, &chunk->ground_plane, lights, num_lights);
+    triangles_rendered += ground_triangles;
   }
 
   for (usize i = 0; i < chunk->num_trees; ++i) {
     // Only render tree_trunk if it has valid vertex data
     if (chunk->trees[i].vertex_data != NULL && chunk->trees[i].num_vertices > 0) {
-      triangles_rendered += render_model(state, camera, &chunk->trees[i], lights, num_lights);
+      usize tree_tris = render_model(state, camera, &chunk->trees[i], lights, num_lights);
+      tree_triangles += tree_tris;
+      triangles_rendered += tree_tris;
     }
   }
+
+  // Debug print for high triangle chunks (every 60 frames)
+  static int debug_frame_counter = 0;
+  if (debug_frame_counter % 60 == 0 && triangles_rendered > 500) {
+    printf("Chunk (%d,%d): %zu triangles (ground: %zu, trees: %zu from %zu trees)\n",
+           chunk->x, chunk->z, triangles_rendered, ground_triangles, tree_triangles, chunk->num_trees);
+  }
+  debug_frame_counter++;
 
   return triangles_rendered;
 }

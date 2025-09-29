@@ -70,21 +70,46 @@ static float fbm(float x, float y, int octaves, int seed) {
 }
 
 // Ridge noise function to create sharp features with seed
-static float ridgeNoise(float x, float y, int seed) {
+float ridgeNoise(float x, float y, int seed) {
   float n = fbm(x, y, 4, seed);
   return 1.0f - fabsf(n);  // Creates ridges by inverting absolute value
 }
 
-// Terrain height function combining fBm and ridge noise with seed
+// Terrain height function combining multiple noise layers for gradual hills and mountains
 float terrainHeight(float x, float y, int seed) {
-  // Base terrain with rolling hills
-  float base = fbm(x * 0.01f, y * 0.01f, 6, WORLD_SEED + seed) * 5.0f;
+  // Define minimum height for frozen lakes
+  const float lake_level = 0.0f;
 
-  // Add ridges for cliffs
-  float ridges = ridgeNoise(x * 0.005f, y * 0.005f, WORLD_SEED) * 3.0f;
+  // Large-scale gentle rolling terrain (very low frequency for gradual hills)
+  float large_hills = fbm(x * 0.003f, y * 0.003f, 4, WORLD_SEED + seed) * 25.0f;
 
-  // Combine them (don't square ridges - too extreme)
-  return base + ridges;
+  // Medium-scale terrain features
+  float medium_hills = fbm(x * 0.008f, y * 0.008f, 5, WORLD_SEED + seed + 1) * 12.0f;
+
+  // Small-scale detail
+  float detail = fbm(x * 0.02f, y * 0.02f, 6, WORLD_SEED + seed + 2) * 4.0f;
+
+  // Domain warping for more interesting mountain shapes
+  float warp_x = fbm(x * 0.005f, y * 0.005f, 3, WORLD_SEED + seed + 3) * 20.0f;
+  float warp_y = fbm(x * 0.005f, y * 0.005f, 3, WORLD_SEED + seed + 4) * 20.0f;
+
+  // Mountain peaks using warped coordinates
+  float mountains = ridgeNoise((x + warp_x) * 0.004f, (y + warp_y) * 0.004f, WORLD_SEED + seed + 5);
+  mountains = powf(mountains, 1.5f) * 35.0f; // More dramatic peaks
+
+  // Blend everything together with smooth transitions
+  float base_terrain = large_hills + medium_hills * 0.7f + detail * 0.3f;
+
+  // Shift terrain down to ensure some areas go below 0.0f for lakes
+  base_terrain -= 8.0f; // This ensures low areas become lakes
+
+  // Use the mountain noise as a mask to selectively add peaks
+  float mountain_mask = smoothstep(fbm(x * 0.002f, y * 0.002f, 3, WORLD_SEED + seed + 6) * 0.5f + 0.5f);
+
+  float height = base_terrain + mountains * mountain_mask;
+
+  // Create frozen lakes by enforcing minimum height
+  return fmaxf(height, lake_level);
 }
 
 float get_interpolated_terrain_height(float x, float z) {
@@ -307,11 +332,11 @@ int generate_tree(model_t *model, float base_radius, float base_angle, float3 ba
     angle_offset = 0.1;                 // main trunk should have slight lean
     upward_factor = 1.0f;
   } else if (level == num_levels - 1) { // genrate top level
-    segment_height = fmaxf(0.1f, ridgeNoise(base_position.x + level, base_position.y + level, WORLD_SEED) * 0.5f);
+    segment_height = fmaxf(0.3f, ridgeNoise(base_position.x + level, base_position.y + level, WORLD_SEED) * 1.2f);
     taper_factor = 0.01;            // taper top branches to a point
     angle_offset = 0.0f;
   } else {                              // mid section
-    segment_height = fmaxf(0.2f, ridgeNoise(base_position.x + level, base_position.y + level, WORLD_SEED) * 2.0f);
+    segment_height = fmaxf(0.5f, ridgeNoise(base_position.x + level, base_position.y + level, WORLD_SEED) * 3.5f);
     angle_offset = spread_factor + (float)level * 0.05f;
   }
 
@@ -327,7 +352,11 @@ int generate_tree(model_t *model, float base_radius, float base_angle, float3 ba
   int ret = generate_tree_cylinder(model, base_radius, top_radius, segment_height, base_position, top_center, num_side_faces, base_angle, base_angle);
 
   if (level < num_levels - 1 && branch_chance > 0.2f) {
-    usize num_branches = (level == 0) ? (4 + (usize)(hash2((int)base_position.x, (int)base_position.z, WORLD_SEED) * 1.0f + 0.5f)) : (2 + (level % 2));
+    // Add more variation to number of branches per level
+    usize base_branches = (level == 0) ? 4 : 2;
+    float branch_variation = hash2((int)(base_position.x * 37 + level), (int)(base_position.z * 41 + level), WORLD_SEED);
+    usize extra_branches = (usize)(branch_variation * 2.0f + 0.5f); // 0-2 extra branches
+    usize num_branches = base_branches + extra_branches;
     if (num_branches > max_branches) num_branches = max_branches;
 
     for (usize i = 0; i < num_branches; ++i) {
@@ -335,35 +364,59 @@ int generate_tree(model_t *model, float base_radius, float base_angle, float3 ba
 
       // Should we generate this continuation?
       float branch_roll = hash2((int)(top_center.x * 13 + i * 17), (int)(top_center.z * 19 + level * 23), WORLD_SEED);
-      if (branch_roll > branch_chance) continue; // Skip this branch
 
-      float growth_base_radius = top_radius * (0.85f + hash2((int)(i * 29), (int)(level * 31), WORLD_SEED) * 0.1f);
+      // For trunk level (level 0), guarantee more branches by using higher effective chance
+      float effective_branch_chance = (level == 0) ? fminf(0.95f, branch_chance + 0.15f) : branch_chance;
+      if (branch_roll > effective_branch_chance) continue; // Skip this branch
+
+      // More variation in branch thickness
+      float radius_variation = hash2((int)(i * 29), (int)(level * 31), WORLD_SEED) * 0.3f; // Increased from 0.1f
+      float growth_base_radius = top_radius * (0.75f + radius_variation); // Lowered base to allow thinner branches
 
       if (i == 0) { // main section - stay close to parent direction
-        branch_growth_angle = growth_angle + (hash2((int)(top_center.x * 7), (int)(top_center.z * 11), WORLD_SEED)) * 0.45f;
-      } else {      // branches - distribute evenly around cylinder
-        // Distribute branches evenly in a full circle around the parent
-        float base_radial_offset = ((float)(i - 1) / (float)(num_branches - 1)) * 2.0f * PI;
-        float random_variation = hash2((int)(top_center.x * 11 + i), (int)(top_center.z * 13 + level), WORLD_SEED) * 0.4f;
+        branch_growth_angle = growth_angle + (hash2((int)(top_center.x * 7), (int)(top_center.z * 11), WORLD_SEED)) * 0.5f;
+      } else {      // branches - use more random distribution instead of even spacing
+        // Sometimes use even distribution, sometimes completely random
+        float distribution_mode = hash2((int)(top_center.x * 43 + level), (int)(top_center.z * 47 + i), WORLD_SEED);
 
-        branch_growth_angle = base_radial_offset + random_variation;
+        if (distribution_mode > 0.3f) {
+          // Even distribution with variation (70% of the time)
+          float base_radial_offset = ((float)(i - 1) / (float)(num_branches - 1)) * 2.0f * PI;
+          float random_variation = hash2((int)(top_center.x * 11 + i), (int)(top_center.z * 13 + level), WORLD_SEED) * 0.8f;
+          branch_growth_angle = base_radial_offset + random_variation;
+        } else {
+          // Completely random angle (30% of the time)
+          branch_growth_angle = hash2((int)(top_center.x * 31 + i), (int)(top_center.z * 37 + level), WORLD_SEED) * 2.0f * PI;
+        }
       }
 
-      // Overlap segments to avoid gaps - project the branch start backwards along its growth direction
-      float overlap_distance = growth_base_radius * 0.4f; // Overlap by 40% of the branch radius
+      // Improved overlap system - start branches closer to parent end for better continuity
+      float overlap_distance = growth_base_radius * 0.6f; // Increased overlap for better connection
       float branch_upward = (level == num_levels - 2) ? 0.3f : 0.3f + (float)(level + 1) * 0.15f; // Next level's upward factor
 
+      // For better continuity, blend branch direction with parent direction - add more variation
+      float base_parent_influence = (i == 0) ? 0.7f : 0.3f; // Main branch follows parent more closely
+      float influence_variation = hash2((int)(top_center.x * 17 + i), (int)(top_center.z * 19 + level), WORLD_SEED) * 0.3f;
+      float parent_influence = base_parent_influence + influence_variation;
+      parent_influence = fmaxf(0.1f, fminf(0.9f, parent_influence)); // Clamp to reasonable range
+
+      float parent_direction_x = sinf(growth_angle) * angle_offset;
+      float parent_direction_z = cosf(growth_angle) * angle_offset;
+
+      // Add some randomness to the spread factor per branch
+      float branch_spread = spread_factor + (float)(level + 1) * 0.05f + hash2((int)(top_center.x * 23), (int)(top_center.z * 29), WORLD_SEED) * 0.3f;
+
       float3 branch_direction = make_float3(
-        sinf(branch_growth_angle) * (spread_factor + (float)(level + 1) * 0.05f),
+        lerp(sinf(branch_growth_angle) * branch_spread, parent_direction_x, parent_influence),
         branch_upward,
-        cosf(branch_growth_angle) * (spread_factor + (float)(level + 1) * 0.05f)
+        lerp(cosf(branch_growth_angle) * branch_spread, parent_direction_z, parent_influence)
       );
 
       branch_direction = float3_normalize(branch_direction);
 
       float3 branch_start = make_float3(
         top_center.x - branch_direction.x * overlap_distance,
-        top_center.y - branch_direction.y * overlap_distance,
+        top_center.y - branch_direction.y * overlap_distance * 0.5f, // Reduce vertical overlap to avoid weird positioning
         top_center.z - branch_direction.z * overlap_distance
       );
 
