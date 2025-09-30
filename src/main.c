@@ -8,14 +8,12 @@
 
 #include <SDL3/SDL.h>
 
+#include "util/config.h"
+#include "util/state.h"
 #include "scene.h"
-#include "state.h"
 
-#define WIN_TITLE "Tundra"
+// Default values
 #define MAX_DEPTH 40
-#define WIN_WIDTH 200
-#define WIN_HEIGHT 125
-#define WIN_SCALE 8
 
 typedef enum {
   GENERATE,
@@ -62,12 +60,12 @@ static const u8 fog_colors[][3] = {
   {0, 0, 0},        // Midnight: black
 };
 
-static void SDL_library_init(SDL_Window **window, SDL_Renderer **renderer, SDL_Texture **frame_buf) {
+static void SDL_library_init(SDL_Window **window, SDL_Renderer **renderer, SDL_Texture **frame_buf, const char *title, int width, int height, int scale) {
   SDL_Init(SDL_INIT_VIDEO);
 
-  SDL_CreateWindowAndRenderer(WIN_TITLE, WIN_WIDTH * WIN_SCALE, WIN_HEIGHT * WIN_SCALE, 0, window, renderer);
+  SDL_CreateWindowAndRenderer(title, width * scale, height * scale, 0, window, renderer);
 
-  *frame_buf = SDL_CreateTexture(*renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_STREAMING, WIN_WIDTH, WIN_HEIGHT);
+  *frame_buf = SDL_CreateTexture(*renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_STREAMING, width, height);
   SDL_SetTextureScaleMode(*frame_buf, SDL_SCALEMODE_NEAREST);
 
   SDL_SetWindowRelativeMouseMode(*window, false);
@@ -158,14 +156,14 @@ static void on_generate(void *args, size_t size) {
     }
   };
 
-  init_scene(&ctx->scene, MAX_CHUNKS);
+  init_scene(&ctx->scene, g_world_config.max_chunks);
 
   // Set initial camera position and height
   float terrain_height = get_interpolated_terrain_height(0.0f, 0.0f);
   ctx->scene.controller.ground_height = terrain_height;
   ctx->scene.camera_pos.position.y = terrain_height + ctx->scene.controller.camera_height_offset;
 
-  change_state(ctx->sm, NORMAL);
+  fsm_change_state(ctx->sm, NORMAL);
 }
 
 static void on_normal_enter(void *args, size_t size) {
@@ -228,7 +226,7 @@ static void on_overhead_enter(void *args, size_t size) {
 
   struct context_t *ctx = (struct context_t*)args;
 
-  ctx->scene.camera_pos.position.y += 75.0f;
+  ctx->scene.camera_pos.position.y += 45.0f;
   ctx->scene.camera_pos.pitch = -PI / 2;
   ctx->scene.camera_pos.yaw = 0;
 
@@ -297,26 +295,33 @@ static state_interface_t overhead = {
 int main(int argc, char const *argv[]) {
   (void)argc; (void)argv;
 
+  // Load window configuration from config.json
+  unsigned int config_width, config_height, config_scale;
+  char config_title[256];
+
+  load_config(&config_width, &config_height, &config_scale, config_title, sizeof(config_title));
+  load_world_config();
+
   SDL_Window *sdl_window;
   SDL_Renderer *sdl_renderer;
   SDL_Texture *sdl_framebuff;
 
-  u32 framebuffer[WIN_WIDTH * WIN_HEIGHT];
-  f32 depth_buffer[WIN_WIDTH * WIN_HEIGHT];
+  u32 *framebuffer = (u32 *)malloc(config_width * config_height * sizeof(u32));
+  f32 *depth_buffer = (f32 *)malloc(config_width * config_height * sizeof(f32));
 
   // Initialize state and window
-  SDL_library_init(&sdl_window, &sdl_renderer, &sdl_framebuff);
+  SDL_library_init(&sdl_window, &sdl_renderer, &sdl_framebuff, config_title, config_width, config_height, config_scale);
   SDL_SetWindowRelativeMouseMode(sdl_window, true);
 
   renderer_t renderer = {0};
-  init_renderer(&renderer, WIN_WIDTH, WIN_HEIGHT, 0, 0, framebuffer, depth_buffer, MAX_DEPTH);
+  init_renderer(&renderer, config_width, config_height, 0, 0, framebuffer, depth_buffer, MAX_DEPTH);
 
   performance_counter stats;
   init_performance_counter(&stats);
 
   // Initialize state machine
   state_machine_t sm = {0};
-  init_state_machine(&sm, GENERATE, NUM_STATES);
+  fsm_init(&sm, GENERATE, NUM_STATES);
 
   struct context_t state_context = {
     .framebuffer = framebuffer,
@@ -328,12 +333,12 @@ int main(int argc, char const *argv[]) {
     .total_time = 0.0f
   };
 
-  set_state_interface(&sm, GENERATE, &generate);
-  set_state_interface(&sm, NORMAL, &normal);
-  set_state_interface(&sm, OVERHEAD, &overhead);
+  fsm_set_state_interface(&sm, GENERATE, &generate);
+  fsm_set_state_interface(&sm, NORMAL, &normal);
+  fsm_set_state_interface(&sm, OVERHEAD, &overhead);
 
-  update_internal_state(&sm, &state_context, sizeof(struct context_t));
-  start_state_machine(&sm);
+  fsm_update_internal_state(&sm, &state_context, sizeof(struct context_t));
+  fsm_start(&sm);
 
   bool running = true;
   float accumulator = 0.0f;
@@ -358,10 +363,10 @@ int main(int argc, char const *argv[]) {
           running = false;
         } 
         
-        if (event.key.key == SDLK_1 && get_state(&sm) != NORMAL)
-          change_state(&sm, NORMAL);
+        if (event.key.key == SDLK_1 && fsm_get_state(&sm) != NORMAL)
+          fsm_change_state(&sm, NORMAL);
         else if (event.key.key == SDLK_2)
-          change_state(&sm, OVERHEAD);
+          fsm_change_state(&sm, OVERHEAD);
         else if (event.key.key == SDLK_3)
           renderer.wireframe_mode = !renderer.wireframe_mode;
       }
@@ -369,7 +374,7 @@ int main(int argc, char const *argv[]) {
 
     // Fixed timestep game updates
     while (accumulator >= TICK_INTERVAL) {
-      tick_state(&sm, TICK_INTERVAL);
+      fsm_tick_state(&sm, TICK_INTERVAL);
 
       accumulator -= TICK_INTERVAL;
       stats.tps_counter++;
@@ -379,14 +384,14 @@ int main(int argc, char const *argv[]) {
     get_fog_color(state_context.total_time, &bg_r, &bg_g, &bg_b);
     u32 background_color = rgb_to_u32(bg_r, bg_g, bg_b);
 
-    for(int i = 0; i < WIN_WIDTH * WIN_HEIGHT; ++i) {
+    for(int i = 0; i < config_width * config_height; ++i) {
       framebuffer[i] = background_color;
       depth_buffer[i] = FLT_MAX;
     }
 
-    render_state(&sm);
+    fsm_render_state(&sm);
 
-    SDL_UpdateTexture(sdl_framebuff, NULL, framebuffer, WIN_WIDTH * sizeof(u32));
+    SDL_UpdateTexture(sdl_framebuff, NULL, framebuffer, config_width * sizeof(u32));
     SDL_RenderTexture(sdl_renderer, sdl_framebuff, NULL, NULL);
     SDL_RenderPresent(sdl_renderer);
     
@@ -406,12 +411,17 @@ int main(int argc, char const *argv[]) {
   }
 
   free_chunk_map(&state_context.scene.chunk_map);
-  free_state_machine(&sm);
-  
+  fsm_free(&sm);
+
+  free(framebuffer);
+  free(depth_buffer);
+
   SDL_DestroyTexture(sdl_framebuff);
   SDL_DestroyRenderer(sdl_renderer);
   SDL_DestroyWindow(sdl_window);
   SDL_Quit();
+
+  free_config();
 
   return 0;
 }

@@ -81,20 +81,20 @@ float terrainHeight(float x, float y, int seed) {
   const float lake_level = 0.0f;
 
   // Large-scale gentle rolling terrain (very low frequency for gradual hills)
-  float large_hills = fbm(x * 0.003f, y * 0.003f, 4, WORLD_SEED + seed) * 25.0f;
+  float large_hills = fbm(x * 0.003f, y * 0.003f, 4, g_world_config.seed + seed) * 25.0f;
 
   // Medium-scale terrain features
-  float medium_hills = fbm(x * 0.008f, y * 0.008f, 5, WORLD_SEED + seed + 1) * 12.0f;
+  float medium_hills = fbm(x * 0.008f, y * 0.008f, 5, g_world_config.seed + seed + 1) * 12.0f;
 
   // Small-scale detail
-  float detail = fbm(x * 0.02f, y * 0.02f, 6, WORLD_SEED + seed + 2) * 4.0f;
+  float detail = fbm(x * 0.02f, y * 0.02f, 6, g_world_config.seed + seed + 2) * 4.0f;
 
   // Domain warping for more interesting mountain shapes
-  float warp_x = fbm(x * 0.005f, y * 0.005f, 3, WORLD_SEED + seed + 3) * 20.0f;
-  float warp_y = fbm(x * 0.005f, y * 0.005f, 3, WORLD_SEED + seed + 4) * 20.0f;
+  float warp_x = fbm(x * 0.005f, y * 0.005f, 3, g_world_config.seed + seed + 3) * 20.0f;
+  float warp_y = fbm(x * 0.005f, y * 0.005f, 3, g_world_config.seed + seed + 4) * 20.0f;
 
   // Mountain peaks using warped coordinates
-  float mountains = ridgeNoise((x + warp_x) * 0.004f, (y + warp_y) * 0.004f, WORLD_SEED + seed + 5);
+  float mountains = ridgeNoise((x + warp_x) * 0.004f, (y + warp_y) * 0.004f, g_world_config.seed + seed + 5);
   mountains = powf(mountains, 1.5f) * 35.0f; // More dramatic peaks
 
   // Blend everything together with smooth transitions
@@ -104,7 +104,7 @@ float terrainHeight(float x, float y, int seed) {
   base_terrain -= 8.0f; // This ensures low areas become lakes
 
   // Use the mountain noise as a mask to selectively add peaks
-  float mountain_mask = smoothstep(fbm(x * 0.002f, y * 0.002f, 3, WORLD_SEED + seed + 6) * 0.5f + 0.5f);
+  float mountain_mask = smoothstep(fbm(x * 0.002f, y * 0.002f, 3, g_world_config.seed + seed + 6) * 0.5f + 0.5f);
 
   float height = base_terrain + mountains * mountain_mask;
 
@@ -133,10 +133,10 @@ float get_interpolated_terrain_height(float x, float z) {
   float corner_z0 = (float)gz * grid_size;
   float corner_z1 = (float)(gz + 1) * grid_size;
   
-  float h00 = terrainHeight(corner_x0, corner_z0, WORLD_SEED);
-  float h10 = terrainHeight(corner_x1, corner_z0, WORLD_SEED);
-  float h01 = terrainHeight(corner_x0, corner_z1, WORLD_SEED);
-  float h11 = terrainHeight(corner_x1, corner_z1, WORLD_SEED);
+  float h00 = terrainHeight(corner_x0, corner_z0, g_world_config.seed);
+  float h10 = terrainHeight(corner_x1, corner_z0, g_world_config.seed);
+  float h01 = terrainHeight(corner_x0, corner_z1, g_world_config.seed);
+  float h11 = terrainHeight(corner_x1, corner_z1, g_world_config.seed);
   
   // Bilinear interpolation
   float h0 = lerp(h00, h10, fx);
@@ -328,15 +328,15 @@ int generate_tree(model_t *model, float base_radius, float base_angle, float3 ba
     return -1;
   } else if (level == 0) {              // generate trunk
     segment_height = base_trunk_height;
-    growth_angle += ((hash2((int)base_position.x, (int)base_position.z, WORLD_SEED)) * 0.15f); // add arandom offsett from rest of tree
+    growth_angle += ((hash2((int)base_position.x, (int)base_position.z, g_world_config.seed)) * 0.15f); // add arandom offsett from rest of tree
     angle_offset = 0.1;                 // main trunk should have slight lean
     upward_factor = 1.0f;
   } else if (level == num_levels - 1) { // genrate top level
-    segment_height = fmaxf(0.3f, ridgeNoise(base_position.x + level, base_position.y + level, WORLD_SEED) * 1.2f);
+    segment_height = fmaxf(0.3f, ridgeNoise(base_position.x + level, base_position.y + level, g_world_config.seed) * 1.2f);
     taper_factor = 0.01;            // taper top branches to a point
     angle_offset = 0.0f;
   } else {                              // mid section
-    segment_height = fmaxf(0.5f, ridgeNoise(base_position.x + level, base_position.y + level, WORLD_SEED) * 3.5f);
+    segment_height = fmaxf(0.5f, ridgeNoise(base_position.x + level, base_position.y + level, g_world_config.seed) * 3.5f);
     angle_offset = spread_factor + (float)level * 0.05f;
   }
 
@@ -354,7 +354,7 @@ int generate_tree(model_t *model, float base_radius, float base_angle, float3 ba
   if (level < num_levels - 1 && branch_chance > 0.2f) {
     // Add more variation to number of branches per level
     usize base_branches = (level == 0) ? 4 : 2;
-    float branch_variation = hash2((int)(base_position.x * 37 + level), (int)(base_position.z * 41 + level), WORLD_SEED);
+    float branch_variation = hash2((int)(base_position.x * 37 + level), (int)(base_position.z * 41 + level), g_world_config.seed);
     usize extra_branches = (usize)(branch_variation * 2.0f + 0.5f); // 0-2 extra branches
     usize num_branches = base_branches + extra_branches;
     if (num_branches > max_branches) num_branches = max_branches;
@@ -363,30 +363,30 @@ int generate_tree(model_t *model, float base_radius, float base_angle, float3 ba
       float branch_growth_angle;
 
       // Should we generate this continuation?
-      float branch_roll = hash2((int)(top_center.x * 13 + i * 17), (int)(top_center.z * 19 + level * 23), WORLD_SEED);
+      float branch_roll = hash2((int)(top_center.x * 13 + i * 17), (int)(top_center.z * 19 + level * 23), g_world_config.seed);
 
       // For trunk level (level 0), guarantee more branches by using higher effective chance
       float effective_branch_chance = (level == 0) ? fminf(0.95f, branch_chance + 0.15f) : branch_chance;
       if (branch_roll > effective_branch_chance) continue; // Skip this branch
 
       // More variation in branch thickness
-      float radius_variation = hash2((int)(i * 29), (int)(level * 31), WORLD_SEED) * 0.3f; // Increased from 0.1f
+      float radius_variation = hash2((int)(i * 29), (int)(level * 31), g_world_config.seed) * 0.3f; // Increased from 0.1f
       float growth_base_radius = top_radius * (0.75f + radius_variation); // Lowered base to allow thinner branches
 
       if (i == 0) { // main section - stay close to parent direction
-        branch_growth_angle = growth_angle + (hash2((int)(top_center.x * 7), (int)(top_center.z * 11), WORLD_SEED)) * 0.5f;
+        branch_growth_angle = growth_angle + (hash2((int)(top_center.x * 7), (int)(top_center.z * 11), g_world_config.seed)) * 0.5f;
       } else {      // branches - use more random distribution instead of even spacing
         // Sometimes use even distribution, sometimes completely random
-        float distribution_mode = hash2((int)(top_center.x * 43 + level), (int)(top_center.z * 47 + i), WORLD_SEED);
+        float distribution_mode = hash2((int)(top_center.x * 43 + level), (int)(top_center.z * 47 + i), g_world_config.seed);
 
         if (distribution_mode > 0.3f) {
           // Even distribution with variation (70% of the time)
           float base_radial_offset = ((float)(i - 1) / (float)(num_branches - 1)) * 2.0f * PI;
-          float random_variation = hash2((int)(top_center.x * 11 + i), (int)(top_center.z * 13 + level), WORLD_SEED) * 0.8f;
+          float random_variation = hash2((int)(top_center.x * 11 + i), (int)(top_center.z * 13 + level), g_world_config.seed) * 0.8f;
           branch_growth_angle = base_radial_offset + random_variation;
         } else {
           // Completely random angle (30% of the time)
-          branch_growth_angle = hash2((int)(top_center.x * 31 + i), (int)(top_center.z * 37 + level), WORLD_SEED) * 2.0f * PI;
+          branch_growth_angle = hash2((int)(top_center.x * 31 + i), (int)(top_center.z * 37 + level), g_world_config.seed) * 2.0f * PI;
         }
       }
 
@@ -396,7 +396,7 @@ int generate_tree(model_t *model, float base_radius, float base_angle, float3 ba
 
       // For better continuity, blend branch direction with parent direction - add more variation
       float base_parent_influence = (i == 0) ? 0.7f : 0.3f; // Main branch follows parent more closely
-      float influence_variation = hash2((int)(top_center.x * 17 + i), (int)(top_center.z * 19 + level), WORLD_SEED) * 0.3f;
+      float influence_variation = hash2((int)(top_center.x * 17 + i), (int)(top_center.z * 19 + level), g_world_config.seed) * 0.3f;
       float parent_influence = base_parent_influence + influence_variation;
       parent_influence = fmaxf(0.1f, fminf(0.9f, parent_influence)); // Clamp to reasonable range
 
@@ -404,7 +404,7 @@ int generate_tree(model_t *model, float base_radius, float base_angle, float3 ba
       float parent_direction_z = cosf(growth_angle) * angle_offset;
 
       // Add some randomness to the spread factor per branch
-      float branch_spread = spread_factor + (float)(level + 1) * 0.05f + hash2((int)(top_center.x * 23), (int)(top_center.z * 29), WORLD_SEED) * 0.3f;
+      float branch_spread = spread_factor + (float)(level + 1) * 0.05f + hash2((int)(top_center.x * 23), (int)(top_center.z * 29), g_world_config.seed) * 0.3f;
 
       float3 branch_direction = make_float3(
         lerp(sinf(branch_growth_angle) * branch_spread, parent_direction_x, parent_influence),
@@ -434,7 +434,7 @@ void generate_ground_plane(model_t *model, float2 size, float2 segment_size, flo
 
   for (usize i = 0; i < model->num_vertices; ++i) {
     float3 *v = &model->vertex_data[i].position;
-    v->y = terrainHeight(v->x, v->z, WORLD_SEED);
+    v->y = terrainHeight(v->x, v->z, g_world_config.seed);
   }
 
   // Recalculate face normals after terrain height modification

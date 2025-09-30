@@ -5,15 +5,8 @@
 #include <shader-works/primitives.h>
 #include <shader-works/maths.h>
 
-#include "chunk_map.h"
-
-// Master seed for all procedural generation
-#define WORLD_SEED 2
-#define CHUNK_SIZE 32
-#define HALF_CHUNK_SIZE CHUNK_SIZE / 2
-#define GROUND_SEGMENTS_PER_CHUNK 4
-#define GROUND_SEGMENT_SIZE ((float)CHUNK_SIZE / (float)GROUND_SEGMENTS_PER_CHUNK)
-#define MAX_CHUNKS 9  // Player + 2 forward + 2 sides + 2 forward diagonals
+#include "util/chunk_map.h"
+#include "util/config.h"
 
 typedef struct {
   float move_speed;

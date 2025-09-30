@@ -25,21 +25,21 @@ static void generate_chunk(chunk_t *chunk, int chunk_x, int chunk_z) {
   chunk->z = chunk_z;
   chunk->ground_plane = (model_t){0};
 
-  float world_x = chunk_x * CHUNK_SIZE;
-  float world_z = chunk_z * CHUNK_SIZE;
+  float world_x = chunk_x * g_world_config.chunk_size;
+  float world_z = chunk_z * g_world_config.chunk_size;
   float corner_x = world_x;
   float corner_z = world_z;
 
-  generate_ground_plane(&chunk->ground_plane, make_float2(CHUNK_SIZE, CHUNK_SIZE), make_float2(1.0f, 1.0f), make_float3(corner_x + HALF_CHUNK_SIZE, 0, corner_z + HALF_CHUNK_SIZE));
+  generate_ground_plane(&chunk->ground_plane, make_float2(g_world_config.chunk_size, g_world_config.chunk_size), make_float2(1.0f, 1.0f), make_float3(corner_x + g_world_config.half_chunk_size, 0, corner_z + g_world_config.half_chunk_size));
   chunk->ground_plane.frag_shader = &ground_shadow_frag;
-  
-  chunk->num_trees = map_range(hash2(chunk_x, chunk_z, WORLD_SEED), -1.0f, 1.0f, 0, 7);
+
+  chunk->num_trees = map_range(hash2(chunk_x, chunk_z, g_world_config.seed), -1.0f, 1.0f, 0, 7);
   chunk->trees = calloc(chunk->num_trees, sizeof(model_t));
 
   for (usize i = 0; i < chunk->num_trees; ++i) {
-    float tree_x = map_range(hash2(chunk_x * 100 + i, chunk_z * 100 + i * 3, WORLD_SEED), -1.0f, 1.0f, world_x + 2, world_x + CHUNK_SIZE - 2);
-    float tree_z = map_range(hash2(chunk_z * 100 + i * 7, chunk_x * 100 + i * 5, WORLD_SEED), -1.0f, 1.0f, world_z + 2, world_z + CHUNK_SIZE - 2);
-    float tree_y = terrainHeight(tree_x, tree_z, WORLD_SEED) - 0.5f;
+    float tree_x = map_range(hash2(chunk_x * 100 + i, chunk_z * 100 + i * 3, g_world_config.seed), -1.0f, 1.0f, world_x + 2, world_x + g_world_config.chunk_size - 2);
+    float tree_z = map_range(hash2(chunk_z * 100 + i * 7, chunk_x * 100 + i * 5, g_world_config.seed), -1.0f, 1.0f, world_z + 2, world_z + g_world_config.chunk_size - 2);
+    float tree_y = terrainHeight(tree_x, tree_z, g_world_config.seed) - 0.5f;
 
     if (tree_y <= 0.1f) {
       continue;
@@ -47,8 +47,8 @@ static void generate_chunk(chunk_t *chunk, int chunk_x, int chunk_z) {
 
     float3 tree_pos = make_float3(tree_x, tree_y, tree_z);
 
-    float chunk_center_x = world_x + HALF_CHUNK_SIZE;
-    float chunk_center_z = world_z + HALF_CHUNK_SIZE;
+    float chunk_center_x = world_x + g_world_config.half_chunk_size;
+    float chunk_center_z = world_z + g_world_config.half_chunk_size;
     float distance_to_chunk = sqrtf((chunk_center_x * chunk_center_x) + (chunk_center_z * chunk_center_z));
     float lod_factor = 1.0f;
     usize segments = 5;
@@ -59,12 +59,12 @@ static void generate_chunk(chunk_t *chunk, int chunk_x, int chunk_z) {
       lod_factor = 0.7f;
       segments = 4;
     }
-    float base_radius = map_range(hash2(tree_pos.x, tree_pos.z, WORLD_SEED), -1.0f, 1.0f, 0.4f, 0.55f);
-    float base_angle = map_range(hash2(tree_pos.x, tree_pos.z, WORLD_SEED), -1.0f, 1.0f, 0.0f, 2.0f * PI);
+    float base_radius = map_range(hash2(tree_pos.x, tree_pos.z, g_world_config.seed), -1.0f, 1.0f, 0.4f, 0.55f);
+    float base_angle = map_range(hash2(tree_pos.x, tree_pos.z, g_world_config.seed), -1.0f, 1.0f, 0.0f, 2.0f * PI);
 
-    float branch_chance = map_range(hash2(tree_pos.x, tree_pos.z, WORLD_SEED), -1.0f, 1.0f, 0.85 * lod_factor, 0.95 * lod_factor);
-    usize max_branches = (usize)map_range(hash2(tree_pos.x, tree_pos.z, WORLD_SEED), -1.0f, 1.0f, 4.f * lod_factor, 6.f * lod_factor);
-    usize num_levels = (usize)map_range(hash2(tree_pos.x, tree_pos.z, WORLD_SEED), -1.0f, 1.0f, 4.f * lod_factor, 5.f * lod_factor);
+    float branch_chance = map_range(hash2(tree_pos.x, tree_pos.z, g_world_config.seed), -1.0f, 1.0f, 0.85 * lod_factor, 0.95 * lod_factor);
+    usize max_branches = (usize)map_range(hash2(tree_pos.x, tree_pos.z, g_world_config.seed), -1.0f, 1.0f, 4.f * lod_factor, 6.f * lod_factor);
+    usize num_levels = (usize)map_range(hash2(tree_pos.x, tree_pos.z, g_world_config.seed), -1.0f, 1.0f, 4.f * lod_factor, 5.f * lod_factor);
     if (max_branches < 3) max_branches = 3;
     if (num_levels < 4) num_levels = 4;
     if (branch_chance < 0.75) branch_chance = 0.75;
@@ -117,8 +117,8 @@ bool cull_chunk(chunk_t *chunk, void *param, usize num_params) {
   transform_t *player = (transform_t*)param;
   
   // Calculate player's chunk coordinates (handle negative coordinates properly)
-  int player_chunk_x = (int)floorf(player->position.x / CHUNK_SIZE);
-  int player_chunk_z = (int)floorf(player->position.z / CHUNK_SIZE);
+  int player_chunk_x = (int)floorf(player->position.x / g_world_config.chunk_size);
+  int player_chunk_z = (int)floorf(player->position.z / g_world_config.chunk_size);
   
   // Check if chunk is within the 2x3 grid pattern
   int dx = chunk->x - player_chunk_x;
@@ -151,11 +151,11 @@ bool cull_chunk(chunk_t *chunk, void *param, usize num_params) {
 void update_loaded_chunks(scene_t *scene) {
   remove_chunk_if(&scene->chunk_map, cull_chunk, &scene->camera_pos, 1);
 
-  int player_chunk_x = (int)floorf(scene->camera_pos.position.x / CHUNK_SIZE);
-  int player_chunk_z = (int)floorf(scene->camera_pos.position.z / CHUNK_SIZE);
+  int player_chunk_x = (int)floorf(scene->camera_pos.position.x / g_world_config.chunk_size);
+  int player_chunk_z = (int)floorf(scene->camera_pos.position.z / g_world_config.chunk_size);
 
-  for (int dx = -1; dx <= 1; dx++) {
-    for (int dz = -1; dz <= 1; dz++) {
+  for (int dx = -g_world_config.chunk_load_radius; dx <= g_world_config.chunk_load_radius; dx++) {
+    for (int dz = -g_world_config.chunk_load_radius; dz <= g_world_config.chunk_load_radius; dz++) {
       int chunk_x = player_chunk_x + dx;
       int chunk_z = player_chunk_z + dz;
 
@@ -184,7 +184,7 @@ static int compare_chunks_by_distance(const void *a, const void *b) {
 usize render_loaded_chunks(renderer_t *state, scene_t *scene, light_t *lights, const usize num_lights) {
   set_shadow_scene(scene);
 
-  chunk_t **chunks = calloc(MAX_CHUNKS, sizeof(chunk_t*));
+  chunk_t **chunks = calloc(g_world_config.max_chunks, sizeof(chunk_t*));
   usize chunk_count = 0;
   usize total_triangles_rendered = 0;
 
@@ -201,8 +201,8 @@ usize render_loaded_chunks(renderer_t *state, scene_t *scene, light_t *lights, c
   for (usize i = 0; i < chunk_count; i++) {
     if (chunks[i]) {
       float2 chunk_center = make_float2(
-        chunks[i]->x * CHUNK_SIZE + HALF_CHUNK_SIZE,
-        chunks[i]->z * CHUNK_SIZE + HALF_CHUNK_SIZE
+        chunks[i]->x * g_world_config.chunk_size + g_world_config.half_chunk_size,
+        chunks[i]->z * g_world_config.chunk_size + g_world_config.half_chunk_size
       );
       
       float distance = float2_magnitude(float2_sub(camera_pos, chunk_center));
@@ -212,9 +212,33 @@ usize render_loaded_chunks(renderer_t *state, scene_t *scene, light_t *lights, c
     }
   }
 
+  // Get camera forward vector (player looks in -Z direction)
+  float3 right, up, forward;
+  transform_get_basis_vectors(&scene->camera_pos, &right, &up, &forward);
+
   qsort(sorted_chunks, chunk_count, sizeof(chunk_distance_t), compare_chunks_by_distance);
   for (usize i = 0; i < chunk_count; i++) {
     if (sorted_chunks[i].chunk) {
+      // Calculate vector from camera to chunk center
+      float3 chunk_center = make_float3(
+        sorted_chunks[i].chunk->x * g_world_config.chunk_size + g_world_config.half_chunk_size,
+        0,
+        sorted_chunks[i].chunk->z * g_world_config.chunk_size + g_world_config.half_chunk_size
+      );
+      float3 to_chunk = float3_sub(chunk_center, scene->camera_pos.position);
+
+      // Check if we're in overhead mode (pitch near -PI/2)
+      bool is_overhead = fabsf(scene->camera_pos.pitch + PI / 2) < 0.1f;
+
+      // Dot product with forward vector (negative because forward is -Z)
+      // If dot < 0, chunk is behind the camera (except in overhead mode)
+      // Add chunk_size buffer to account for chunk size and avoid culling visible chunks
+      float dot = is_overhead ? 1.0f : float3_dot(to_chunk, forward);
+      if (dot < -(g_world_config.chunk_size * 2)) {
+        // Chunk is fully behind the player, skip rendering
+        continue;
+      }
+
       total_triangles_rendered += render_chunk(state, sorted_chunks[i].chunk, &scene->camera_pos, lights, num_lights, scene);
     }
   }

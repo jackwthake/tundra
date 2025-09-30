@@ -15,6 +15,7 @@ static void free_chunk_node(chunk_map_node_t *node) {
     delete_model(&node->chunk.trees[i]);
   }
 
+  // Free the trees array itself
   if (node->chunk.trees) {
     free(node->chunk.trees);
   }
@@ -57,6 +58,7 @@ void insert_chunk(chunk_map_t *map, chunk_t *chunk) {
 
   chunk_map_node_t *old_head = map->buckets[index];
 
+  // emplace new chunk at start of list, no reason to iterate to the end to add
   chunk_map_node_t *head = malloc(sizeof(chunk_map_node_t));
   head->chunk = *chunk;
   head->loaded = true;
@@ -97,7 +99,7 @@ void remove_chunk_if(chunk_map_t *map, query_func func, void *param, usize num_p
     chunk_map_node_t *head = map->buckets[i], *prev = NULL;
 
     while (head) {
-      chunk_map_node_t *next = head->next;
+      chunk_map_node_t *next = head->next; // Store next before potential free
 
       if (func(&head->chunk, param, num_params)) {
         if (prev == NULL) {
@@ -108,6 +110,8 @@ void remove_chunk_if(chunk_map_t *map, query_func func, void *param, usize num_p
 
         free_chunk_node(head);
         --map->num_loaded_chunks;
+
+        // Continue with next node instead of returning
         head = next;
       } else {
         prev = head;
@@ -138,6 +142,7 @@ bool is_chunk_loaded(chunk_map_t *map, int x, int z) {
   return node ? node->loaded : false;
 }
 
+// used to get all chunks using query_chunk_map
 static inline bool always_true(chunk_t *chunk, void *params, usize num_params) {
   (void)chunk; (void)params; (void)num_params;
   return true;

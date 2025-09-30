@@ -2,7 +2,8 @@
 
 #include <stdlib.h>
 
-void init_state_machine(state_machine_t *sm, unsigned default_state, unsigned num_states) {
+// Initialize FSM and allocate state interfaces
+void fsm_init(state_machine_t *sm, unsigned default_state, unsigned num_states) {
   if (!sm) return;
 
   sm->default_state = default_state;
@@ -15,7 +16,8 @@ void init_state_machine(state_machine_t *sm, unsigned default_state, unsigned nu
   sm->game_state_size = 0;
 }
 
-int start_state_machine(state_machine_t *sm) {
+// Enter the current state to begin FSM execution
+int fsm_start(state_machine_t *sm) {
   if (!sm) return -1;
 
   if ((unsigned)sm->current_state < sm->num_states && sm->states[sm->current_state].enter) {
@@ -27,7 +29,8 @@ int start_state_machine(state_machine_t *sm) {
   return -1;
 }
 
-void free_state_machine(state_machine_t *sm) {
+// Free allocated state interface array
+void fsm_free(state_machine_t *sm) {
   if (!sm) return;
 
   free(sm->states);
@@ -38,7 +41,8 @@ void free_state_machine(state_machine_t *sm) {
   sm->game_state_size = 0;
 }
 
-int set_state_interface(state_machine_t *sm, unsigned state, state_interface_t *interface) {
+// Register callbacks for a specific state
+int fsm_set_state_interface(state_machine_t *sm, unsigned state, state_interface_t *interface) {
   if (!sm || !interface) return -1;
   if (state >= sm->num_states) return -1;
 
@@ -47,7 +51,8 @@ int set_state_interface(state_machine_t *sm, unsigned state, state_interface_t *
   return 1;
 }
 
-int update_internal_state(state_machine_t *sm, void *state, size_t size) {
+// Update the shared state pointer passed to all callbacks
+int fsm_update_internal_state(state_machine_t *sm, void *state, size_t size) {
   if (!sm || !state) return -1;
 
   sm->game_state = state;
@@ -55,7 +60,8 @@ int update_internal_state(state_machine_t *sm, void *state, size_t size) {
   return 1;
 }
 
-int change_state(state_machine_t *sm, unsigned new_state) {
+// Transition between states, calling exit and enter callbacks
+int fsm_change_state(state_machine_t *sm, unsigned new_state) {
   if (!sm) return -1;
   if (new_state >= sm->num_states) return -1;
 
@@ -70,20 +76,23 @@ int change_state(state_machine_t *sm, unsigned new_state) {
   return 1;
 }
 
-int get_state(state_machine_t *sm) {
+// Return the current state index
+int fsm_get_state(state_machine_t *sm) {
   if (!sm) return -1;
 
   return (int)sm->current_state;
 }
 
-void tick_state(state_machine_t *sm, float dt) {
+// Execute tick callback with delta time for fixed timestep updates
+void fsm_tick_state(state_machine_t *sm, float dt) {
   if (!sm) return;
 
   if (sm->states[sm->current_state].tick)
     sm->states[sm->current_state].tick(sm->game_state, sm->game_state_size, dt);
 }
 
-int render_state(state_machine_t *sm) {
+// Execute render callback, returns number of triangles rendered
+int fsm_render_state(state_machine_t *sm) {
   if (!sm) return 0;
 
   if (sm->states[sm->current_state].render)

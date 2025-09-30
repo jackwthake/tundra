@@ -29,13 +29,23 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/")
 
-# Add submodules (they will use the minimal warning flags above)
+# Disable tests, examples, and extra targets for all libraries
+set(SDL_TEST OFF CACHE BOOL "Disable SDL tests")
+set(SDL_TESTS OFF CACHE BOOL "Disable SDL tests")
+set(SDL_EXAMPLES OFF CACHE BOOL "Disable SDL examples")
+set(SDL_INSTALL OFF CACHE BOOL "Disable SDL install")
 add_subdirectory(lib/SDL)
 
-# Configure shader-works to not build examples (which contain conflicting SDL) and disable threading
+# Configure shader-works to not build examples and enable threading
 set(SHADER_WORKS_BUILD_EXAMPLES OFF CACHE BOOL "Don't build shader-works examples")
 set(SHADER_WORKS_USE_THREADS ON CACHE BOOL "Enable threads")
 add_subdirectory(lib/shader-works)
+
+# Disable cJSON tests and utilities
+set(ENABLE_CJSON_TEST OFF CACHE BOOL "Disable cJSON tests")
+set(BUILD_SHARED_AND_STATIC_LIBS OFF CACHE BOOL "Only build static lib")
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "Don't build shared lib")
+add_subdirectory(lib/cJSON)
 
 # Find source files in src directory
 file(GLOB_RECURSE SOURCES "src/*.c")
@@ -48,6 +58,7 @@ if(SOURCES)
     target_link_libraries(${PROJECT_NAME}
         SDL3::SDL3
         shader-works-lib
+        cjson
     )
 
     # Include directories
@@ -55,6 +66,7 @@ if(SOURCES)
         src
         lib/SDL/include
         lib/shader-works/include
+        lib/cJSON
     )
 
     # Apply strict warning flags only to your project code
@@ -64,6 +76,13 @@ if(SOURCES)
         -Wpedantic
         -Wstrict-prototypes
         -Wshadow
+    )
+
+    # Copy config.json to build directory
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy
+        ${CMAKE_SOURCE_DIR}/res/config.json
+        ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/config.json
     )
 else()
     message(STATUS "No source files found in src/ directory")

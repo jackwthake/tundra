@@ -30,7 +30,7 @@ u32 tree_frag_func(u32 input, fragment_context_t *ctx, void *args, usize argc) {
   float x = floorf(ctx->world_pos.x / check_size);
   float z = floorf(ctx->world_pos.y / check_size);
 
-  float intensity = map_range(noise2D(x, z, WORLD_SEED), -1.0f, 1.0f, 0.55f, 1.0f);
+  float intensity = map_range(noise2D(x, z, g_world_config.seed), -1.0f, 1.0f, 0.55f, 1.0f);
 
   u8 r = (u8)(110.f * intensity);
   u8 g = (u8)(90.f * intensity);
@@ -45,8 +45,8 @@ static bool point_in_tree_shadow(float3 world_pos, scene_t *scene) {
   // Check current and neighboring chunks for tree shadows
   for (int dx = -1; dx <= 1; dx++) {
     for (int dz = -1; dz <= 1; dz++) {
-      int chunk_x = (int)floorf(world_pos.x / CHUNK_SIZE) + dx;
-      int chunk_z = (int)floorf(world_pos.z / CHUNK_SIZE) + dz;
+      int chunk_x = (int)floorf(world_pos.x / g_world_config.chunk_size) + dx;
+      int chunk_z = (int)floorf(world_pos.z / g_world_config.chunk_size) + dz;
 
       chunk_map_node_t *node = chunk_lookup((chunk_map_t*)&scene->chunk_map, chunk_x, chunk_z);
       if (!node || !node->loaded) continue;
@@ -58,10 +58,10 @@ static bool point_in_tree_shadow(float3 world_pos, scene_t *scene) {
         if (chunk->trees[i].num_vertices == 0) continue;
 
         // Recalculate tree position using same method as generation
-        float world_x = chunk_x * CHUNK_SIZE;
-        float world_z = chunk_z * CHUNK_SIZE;
-        float tree_x = map_range(hash2(chunk_x * 100 + i, chunk_z * 100 + i * 3, WORLD_SEED), -1.0f, 1.0f, world_x + 2, world_x + CHUNK_SIZE - 2);
-        float tree_z = map_range(hash2(chunk_z * 100 + i * 7, chunk_x * 100 + i * 5, WORLD_SEED), -1.0f, 1.0f, world_z + 2, world_z + CHUNK_SIZE - 2);
+        float world_x = chunk_x * g_world_config.chunk_size;
+        float world_z = chunk_z * g_world_config.chunk_size;
+        float tree_x = map_range(hash2(chunk_x * 100 + i, chunk_z * 100 + i * 3, g_world_config.seed), -1.0f, 1.0f, world_x + 2, world_x + g_world_config.chunk_size - 2);
+        float tree_z = map_range(hash2(chunk_z * 100 + i * 7, chunk_x * 100 + i * 5, g_world_config.seed), -1.0f, 1.0f, world_z + 2, world_z + g_world_config.chunk_size - 2);
 
         // Simple circular shadow check
         float tree_dx = world_pos.x - tree_x;
@@ -90,7 +90,7 @@ u32 ground_shadow_func(u32 input, fragment_context_t *ctx, void *args, usize arg
   // Frozen lake ice texture
   if (terrain_height <= 0.01f) {
     // Ice surface variation
-    float ice_variation = ridgeNoise(ctx->world_pos.x * 0.1f, ctx->world_pos.z * 0.1f, WORLD_SEED + 100);
+    float ice_variation = ridgeNoise(ctx->world_pos.x * 0.1f, ctx->world_pos.z * 0.1f, g_world_config.seed + 100);
     ice_variation = map_range(ice_variation, 0.0f, 1.0f, 0.4f, 1.6f);
 
     // Crack detection using gradient edge detection
@@ -98,15 +98,15 @@ u32 ground_shadow_func(u32 input, fragment_context_t *ctx, void *args, usize arg
     float crack_sample_offset = 0.1f;
 
     // Primary crack layer
-    float crack1 = ridgeNoise(ctx->world_pos.x * crack_freq, ctx->world_pos.z * crack_freq, WORLD_SEED + 200);
-    float crack1_x = ridgeNoise((ctx->world_pos.x + crack_sample_offset) * crack_freq, ctx->world_pos.z * crack_freq, WORLD_SEED + 200);
-    float crack1_z = ridgeNoise(ctx->world_pos.x * crack_freq, (ctx->world_pos.z + crack_sample_offset) * crack_freq, WORLD_SEED + 200);
+    float crack1 = ridgeNoise(ctx->world_pos.x * crack_freq, ctx->world_pos.z * crack_freq, g_world_config.seed + 200);
+    float crack1_x = ridgeNoise((ctx->world_pos.x + crack_sample_offset) * crack_freq, ctx->world_pos.z * crack_freq, g_world_config.seed + 200);
+    float crack1_z = ridgeNoise(ctx->world_pos.x * crack_freq, (ctx->world_pos.z + crack_sample_offset) * crack_freq, g_world_config.seed + 200);
 
     // Secondary crack layer
     float crack2_freq = crack_freq * 0.7f;
-    float crack2 = ridgeNoise(ctx->world_pos.x * crack2_freq, ctx->world_pos.z * crack2_freq, WORLD_SEED + 300);
-    float crack2_x = ridgeNoise((ctx->world_pos.x + crack_sample_offset) * crack2_freq, ctx->world_pos.z * crack2_freq, WORLD_SEED + 300);
-    float crack2_z = ridgeNoise(ctx->world_pos.x * crack2_freq, (ctx->world_pos.z + crack_sample_offset) * crack2_freq, WORLD_SEED + 300);
+    float crack2 = ridgeNoise(ctx->world_pos.x * crack2_freq, ctx->world_pos.z * crack2_freq, g_world_config.seed + 300);
+    float crack2_x = ridgeNoise((ctx->world_pos.x + crack_sample_offset) * crack2_freq, ctx->world_pos.z * crack2_freq, g_world_config.seed + 300);
+    float crack2_z = ridgeNoise(ctx->world_pos.x * crack2_freq, (ctx->world_pos.z + crack_sample_offset) * crack2_freq, g_world_config.seed + 300);
 
     // Calculate crack edges from gradients
     float edge1 = fabsf(crack1_x - crack1) + fabsf(crack1_z - crack1);
@@ -131,12 +131,12 @@ u32 ground_shadow_func(u32 input, fragment_context_t *ctx, void *args, usize arg
     float gravel_z = floorf(ctx->world_pos.z / 0.15f);
 
     // Gravel base color and texture
-    float gravel_base = noise2D(gravel_x, gravel_z, WORLD_SEED + 500);
-    float gravel_ridge = ridgeNoise(gravel_x * 0.7f, gravel_z * 0.7f, WORLD_SEED + 600);
+    float gravel_base = noise2D(gravel_x, gravel_z, g_world_config.seed + 500);
+    float gravel_ridge = ridgeNoise(gravel_x * 0.7f, gravel_z * 0.7f, g_world_config.seed + 600);
     float gravel_intensity = map_range(gravel_base, -1.0f, 1.0f, 0.5f, 1.3f) + gravel_ridge * 0.4f;
 
     // White stone chance (15%)
-    float stone_chance = map_range(hash2((int)gravel_x, (int)gravel_z, WORLD_SEED + 700), -1.0f, 1.0f, 0.0f, 1.0f);
+    float stone_chance = map_range(hash2((int)gravel_x, (int)gravel_z, g_world_config.seed + 700), -1.0f, 1.0f, 0.0f, 1.0f);
 
     if (stone_chance > 0.85f) {
       // White stones
@@ -158,7 +158,7 @@ u32 ground_shadow_func(u32 input, fragment_context_t *ctx, void *args, usize arg
     float x = floorf(ctx->world_pos.x / check_size);
     float z = floorf(ctx->world_pos.z / check_size);
 
-    float intensity = map_range(noise2D(x, z, WORLD_SEED), -1.0f, 1.0f, 0.85f, 1.0f);
+    float intensity = map_range(noise2D(x, z, g_world_config.seed), -1.0f, 1.0f, 0.85f, 1.0f);
 
     u8 r = (u8)(255.f * intensity);
     u8 g = (u8)(255.f * intensity);
