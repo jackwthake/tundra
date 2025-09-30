@@ -6,7 +6,8 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include "scene.h"
-#include "chunk_map.h"
+
+#include "util/chunk_map.h"
 
 u32 rgb_to_u32(u8 r, u8 g, u8 b) {
   const SDL_PixelFormatDetails *format = SDL_GetPixelFormatDetails(SDL_PIXELFORMAT_RGBA8888);
