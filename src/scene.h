@@ -30,6 +30,7 @@ typedef struct scene_t {
   fps_controller_t controller;
 
   chunk_map_t chunk_map;
+  light_t sun;
 } scene_t;
 
 // Implementation found in proc_gen.c

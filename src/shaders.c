@@ -227,21 +227,22 @@ void set_shadow_scene(scene_t *scene) {
   ground_shadow_frag.argc = sizeof(scene_t);
 }
 
-// Falling particle system constants
-#define MAX_PARTICLES 300
-#define MIN_DISTANCE -8.0f
-#define MAX_DISTANCE 50.0f
-#define UPDATE_DISTANCE 45.0f  // Stop updating particles beyond this distance
-#define SPAWN_HEIGHT_MIN_OFFSET 25.0f
-#define SPAWN_HEIGHT_MAX_OFFSET 40.0f
-#define FALL_SPEED_MIN 13.0f
-#define FALL_SPEED_MAX 20.0f
-#define SWAY_SPEED_MIN 0.5f
-#define SWAY_SPEED_MAX 5.5f
-#define SWAY_AMPLITUDE 0.75f
-#define QUAD_SIZE 0.2f
-#define SPAWN_INTERVAL 0.05f
-#define FRAME_TIME 0.016f
+typedef struct {
+  int max_particles;
+  float min_distance;
+  float max_distance;
+  float update_distance;
+  float spawn_height_min_offset;
+  float spawn_height_max_offset;
+  float fall_speed_min;
+  float fall_speed_max;
+  float sway_speed_min;
+  float sway_speed_max;
+  float sway_amplitude;
+  float quad_size;
+  float spawn_interval;
+  float frame_time;
+} particle_system_t;
 
 typedef struct {
   model_t model;
@@ -251,11 +252,28 @@ typedef struct {
   bool active;
 } falling_particle_t;
 
+#define MAX_PARTICLES 300
 static falling_particle_t particles[MAX_PARTICLES];
 static bool particles_initialized = false;
+static particle_system_t particle_system = {
+  .max_particles = 300,
+  .min_distance = -8.0f,
+  .max_distance = 50.0f,
+  .update_distance = 45.0f,
+  .spawn_height_min_offset = 25.0f,
+  .spawn_height_max_offset = 40.0f,
+  .fall_speed_min = 13.0f,
+  .fall_speed_max = 20.0f,
+  .sway_speed_min = 0.5f,
+  .sway_speed_max = 5.5f,
+  .sway_amplitude = 0.75f,
+  .quad_size = 0.2f,
+  .spawn_interval = 0.05f,
+  .frame_time = 0.016f
+};
 
-static void init_particles(void) {
-  for (int i = 0; i < MAX_PARTICLES; i++) {
+static void init_particles(particle_system_t *ps) {
+  for (int i = 0; i < ps->max_particles; i++) {
     particles[i].model = (model_t){0};
     particles[i].velocity = make_float3(0, 0, 0);
     particles[i].sway_time = 0.0f;
@@ -271,62 +289,64 @@ static bool is_particle_in_range(float3 particle_pos, float3 center_pos, float r
   return (dx * dx + dz * dz) <= (radius * radius);
 }
 
-static float3 generate_spawn_position(float3 center, float radius) {
+static float3 generate_spawn_position(particle_system_t *ps, float3 center, float radius) {
   float angle = rand_float() * 2.0f * M_PI;
   float distance = radius * sqrtf(rand_float());
 
   float dx = distance * cosf(angle);
   float dz = distance * sinf(angle);
-  float height_offset = SPAWN_HEIGHT_MIN_OFFSET * (1.0f - distance / MAX_DISTANCE);
+  float height_offset = ps->spawn_height_min_offset * (1.0f - distance / ps->max_distance);
 
   return make_float3(center.x + dx, center.y + height_offset, center.z + dz);
 }
 
-static void spawn_particle(int index, float3 player_pos, transform_t *camera_transform) {
+static void spawn_particle(particle_system_t *ps, int index, float3 player_pos, transform_t *camera_transform) {
   (void)camera_transform;
 
-  float3 position = generate_spawn_position(player_pos, MAX_DISTANCE);
+  float3 position = generate_spawn_position(ps, player_pos, ps->max_distance);
 
-  generate_quad(&particles[index].model, (float2){QUAD_SIZE, QUAD_SIZE}, position);
+  generate_quad(&particles[index].model, (float2){ps->quad_size, ps->quad_size}, position);
   particles[index].model.frag_shader = &white_frag;
   particles[index].model.vertex_shader = &billboard_vs;
   particles[index].model.disable_behind_camera_culling = true;
 
-  float fall_speed = FALL_SPEED_MIN + rand_float() * (FALL_SPEED_MAX - FALL_SPEED_MIN);
+  float fall_speed = ps->fall_speed_min + rand_float() * (ps->fall_speed_max - ps->fall_speed_min);
   particles[index].velocity = make_float3(0, -fall_speed, 0);
   particles[index].sway_time = 0.0f;
-  particles[index].sway_speed = SWAY_SPEED_MIN + rand_float() * (SWAY_SPEED_MAX - SWAY_SPEED_MIN);
+  particles[index].sway_speed = ps->sway_speed_min + rand_float() * (ps->sway_speed_max - ps->sway_speed_min);
   particles[index].active = true;
 }
 
 void update_quads(float3 player_pos, transform_t *camera_transform) {
+  particle_system_t *ps = &particle_system;
+
   if (!particles_initialized) {
-    init_particles();
-    for (int i = 0; i < MAX_PARTICLES / 2; i++) {
-      spawn_particle(i, player_pos, camera_transform);
+    init_particles(ps);
+    for (int i = 0; i < ps->max_particles / 2; i++) {
+      spawn_particle(ps, i, player_pos, camera_transform);
     }
     return;
   }
 
   static float spawn_timer = 0.0f;
-  spawn_timer += FRAME_TIME;
+  spawn_timer += ps->frame_time;
 
-  for (int i = 0; i < MAX_PARTICLES; i++) {
+  for (int i = 0; i < ps->max_particles; i++) {
     if (!particles[i].active) continue;
 
-    if (!is_particle_in_range(particles[i].model.transform.position, player_pos, MAX_DISTANCE)) {
+    if (!is_particle_in_range(particles[i].model.transform.position, player_pos, ps->max_distance)) {
       particles[i].active = false;
       continue;
     }
 
-    if (!is_particle_in_range(particles[i].model.transform.position, player_pos, UPDATE_DISTANCE)) {
+    if (!is_particle_in_range(particles[i].model.transform.position, player_pos, ps->update_distance)) {
       continue;
     }
 
-    particles[i].sway_time += particles[i].sway_speed * FRAME_TIME;
-    float sway_offset = sinf(particles[i].sway_time) * SWAY_AMPLITUDE * FRAME_TIME;
+    particles[i].sway_time += particles[i].sway_speed * ps->frame_time;
+    float sway_offset = sinf(particles[i].sway_time) * ps->sway_amplitude * ps->frame_time;
 
-    particles[i].model.transform.position.y += particles[i].velocity.y * FRAME_TIME;
+    particles[i].model.transform.position.y += particles[i].velocity.y * ps->frame_time;
     particles[i].model.transform.position.x += sway_offset;
 
     float ground_height = get_interpolated_terrain_height(
@@ -335,14 +355,14 @@ void update_quads(float3 player_pos, transform_t *camera_transform) {
     );
 
     if (particles[i].model.transform.position.y <= ground_height + 0.5f) {
-      spawn_particle(i, player_pos, camera_transform);
+      spawn_particle(ps, i, player_pos, camera_transform);
     }
   }
 
-  if (spawn_timer > SPAWN_INTERVAL) {
-    for (int i = 0; i < MAX_PARTICLES; i++) {
+  if (spawn_timer > ps->spawn_interval) {
+    for (int i = 0; i < ps->max_particles; i++) {
       if (!particles[i].active) {
-        spawn_particle(i, player_pos, camera_transform);
+        spawn_particle(ps, i, player_pos, camera_transform);
         break;
       }
     }
@@ -351,9 +371,10 @@ void update_quads(float3 player_pos, transform_t *camera_transform) {
 }
 
 usize render_quads(renderer_t *renderer, transform_t *camera, light_t *lights, usize num_lights) {
+  particle_system_t *ps = &particle_system;
   usize total_triangles = 0;
 
-  for (int i = 0; i < MAX_PARTICLES; i++) {
+  for (int i = 0; i < ps->max_particles; i++) {
     if (particles[i].active && particles[i].model.vertex_data) {
       usize triangles = render_model(renderer, camera, &particles[i].model, lights, num_lights);
       total_triangles += triangles;

@@ -20,72 +20,51 @@ extern void generate_ground_plane(model_t *, float2, float2, float3);           
 
 static void generate_chunk(chunk_t *chunk, int chunk_x, int chunk_z) {
   if (chunk == NULL) return;
-  
+
   chunk->x = chunk_x;
   chunk->z = chunk_z;
-  
-  // Initialize ground plane model to zero state
   chunk->ground_plane = (model_t){0};
-  
+
   float world_x = chunk_x * CHUNK_SIZE;
   float world_z = chunk_z * CHUNK_SIZE;
-  
-  // Position chunk to ensure vertex grid alignment at boundaries
-  // Use corner-based positioning to ensure vertices align perfectly
   float corner_x = world_x;
   float corner_z = world_z;
-  
+
   generate_ground_plane(&chunk->ground_plane, make_float2(CHUNK_SIZE, CHUNK_SIZE), make_float2(1.0f, 1.0f), make_float3(corner_x + HALF_CHUNK_SIZE, 0, corner_z + HALF_CHUNK_SIZE));
   chunk->ground_plane.frag_shader = &ground_shadow_frag;
   
-  // Ensure ground plane was generated successfully
-  if (chunk->ground_plane.vertex_data == NULL || chunk->ground_plane.num_vertices == 0) {
-    // Re-try ground plane generation or handle error
-    generate_ground_plane(&chunk->ground_plane, make_float2(CHUNK_SIZE, CHUNK_SIZE), make_float2(1.0f, 1.0f), make_float3(corner_x + HALF_CHUNK_SIZE, 0, corner_z + HALF_CHUNK_SIZE));
-  }
-  
   chunk->num_trees = map_range(hash2(chunk_x, chunk_z, WORLD_SEED), -1.0f, 1.0f, 0, 7);
   chunk->trees = calloc(chunk->num_trees, sizeof(model_t));
-  
+
   for (usize i = 0; i < chunk->num_trees; ++i) {
-    // Random position within chunk bounds - use chunk coordinates in hash for uniqueness
     float tree_x = map_range(hash2(chunk_x * 100 + i, chunk_z * 100 + i * 3, WORLD_SEED), -1.0f, 1.0f, world_x + 2, world_x + CHUNK_SIZE - 2);
     float tree_z = map_range(hash2(chunk_z * 100 + i * 7, chunk_x * 100 + i * 5, WORLD_SEED), -1.0f, 1.0f, world_z + 2, world_z + CHUNK_SIZE - 2);
-    float tree_y = terrainHeight(tree_x, tree_z, WORLD_SEED) - 0.5f; // Use actual tree position for height
+    float tree_y = terrainHeight(tree_x, tree_z, WORLD_SEED) - 0.5f;
 
-    // Skip tree generation if on frozen lake (at minimum height)
-    if (tree_y <= 0.0f + 0.1f) { // Small threshold to account for floating point precision
-      continue; // Skip this tree, don't generate it
+    if (tree_y <= 0.1f) {
+      continue;
     }
 
     float3 tree_pos = make_float3(tree_x, tree_y, tree_z);
 
-    // Calculate distance from origin for LOD (this is fine for distance-based LOD)
     float chunk_center_x = world_x + HALF_CHUNK_SIZE;
     float chunk_center_z = world_z + HALF_CHUNK_SIZE;
     float distance_to_chunk = sqrtf((chunk_center_x * chunk_center_x) + (chunk_center_z * chunk_center_z));
-
-    // Level of Detail: reduce complexity based on distance
     float lod_factor = 1.0f;
-    usize segments = 5;  // Increased from 4 for better visual quality
+    usize segments = 5;
     if (distance_to_chunk > 100.0f) {
-      lod_factor = 0.5f;  // Less aggressive reduction for distant trees
+      lod_factor = 0.5f;
       segments = 4;
     } else if (distance_to_chunk > 50.0f) {
-      lod_factor = 0.7f;  // Less aggressive reduction for mid-distance trees
+      lod_factor = 0.7f;
       segments = 4;
     }
-
-    // Better balance between performance and visual quality
     float base_radius = map_range(hash2(tree_pos.x, tree_pos.z, WORLD_SEED), -1.0f, 1.0f, 0.4f, 0.55f);
     float base_angle = map_range(hash2(tree_pos.x, tree_pos.z, WORLD_SEED), -1.0f, 1.0f, 0.0f, 2.0f * PI);
 
-    // Higher minimum branch chance to ensure fuller trees
     float branch_chance = map_range(hash2(tree_pos.x, tree_pos.z, WORLD_SEED), -1.0f, 1.0f, 0.85 * lod_factor, 0.95 * lod_factor);
     usize max_branches = (usize)map_range(hash2(tree_pos.x, tree_pos.z, WORLD_SEED), -1.0f, 1.0f, 4.f * lod_factor, 6.f * lod_factor);
     usize num_levels = (usize)map_range(hash2(tree_pos.x, tree_pos.z, WORLD_SEED), -1.0f, 1.0f, 4.f * lod_factor, 5.f * lod_factor);
-
-    // Ensure minimum values for decent-looking trees - higher minimums for fuller trees
     if (max_branches < 3) max_branches = 3;
     if (num_levels < 4) num_levels = 4;
     if (branch_chance < 0.75) branch_chance = 0.75;
@@ -99,31 +78,15 @@ static void generate_chunk(chunk_t *chunk, int chunk_x, int chunk_z) {
 static usize render_chunk(renderer_t *state, chunk_t *chunk, transform_t *camera, light_t *lights, const usize num_lights, scene_t *scene) {
   (void)scene;
   usize triangles_rendered = 0;
-  usize ground_triangles = 0;
-  usize tree_triangles = 0;
-
-  // Only render ground plane if it has valid vertex data
   if (chunk->ground_plane.vertex_data != NULL && chunk->ground_plane.num_vertices > 0) {
-    ground_triangles = render_model(state, camera, &chunk->ground_plane, lights, num_lights);
-    triangles_rendered += ground_triangles;
+    triangles_rendered += render_model(state, camera, &chunk->ground_plane, lights, num_lights);
   }
 
   for (usize i = 0; i < chunk->num_trees; ++i) {
-    // Only render tree_trunk if it has valid vertex data
     if (chunk->trees[i].vertex_data != NULL && chunk->trees[i].num_vertices > 0) {
-      usize tree_tris = render_model(state, camera, &chunk->trees[i], lights, num_lights);
-      tree_triangles += tree_tris;
-      triangles_rendered += tree_tris;
+      triangles_rendered += render_model(state, camera, &chunk->trees[i], lights, num_lights);
     }
   }
-
-  // Debug print for high triangle chunks (every 60 frames)
-  static int debug_frame_counter = 0;
-  if (debug_frame_counter % 60 == 0 && triangles_rendered > 500) {
-    printf("Chunk (%d,%d): %zu triangles (ground: %zu, trees: %zu from %zu trees)\n",
-           chunk->x, chunk->z, triangles_rendered, ground_triangles, tree_triangles, chunk->num_trees);
-  }
-  debug_frame_counter++;
 
   return triangles_rendered;
 }
@@ -187,42 +150,28 @@ bool cull_chunk(chunk_t *chunk, void *param, usize num_params) {
 
 void update_loaded_chunks(scene_t *scene) {
   remove_chunk_if(&scene->chunk_map, cull_chunk, &scene->camera_pos, 1);
-  
-  // Calculate player's chunk coordinates (handle negative coordinates properly)
+
   int player_chunk_x = (int)floorf(scene->camera_pos.position.x / CHUNK_SIZE);
   int player_chunk_z = (int)floorf(scene->camera_pos.position.z / CHUNK_SIZE);
-  
-  // Generate 3x3 grid around player
-  static int debug_frame = 0;
+
   for (int dx = -1; dx <= 1; dx++) {
     for (int dz = -1; dz <= 1; dz++) {
       int chunk_x = player_chunk_x + dx;
       int chunk_z = player_chunk_z + dz;
-      
-      // Check if chunk is already loaded
+
       if (!is_chunk_loaded(&scene->chunk_map, chunk_x, chunk_z)) {
         chunk_t new_chunk = {0};
         generate_chunk(&new_chunk, chunk_x, chunk_z);
         insert_chunk(&scene->chunk_map, &new_chunk);
-        if (debug_frame % 60 == 0) {
-          printf("  Loading chunk (%d,%d)\n", chunk_x, chunk_z);
-        }
-      } else if (debug_frame % 60 == 0) {
-        printf("  Chunk (%d,%d) already loaded\n", chunk_x, chunk_z);
       }
     }
-    
-    ++debug_frame;
   }
 }
 
-// Helper structure for sorting chunks by distance
 typedef struct {
   chunk_t *chunk;
   float distance;
 } chunk_distance_t;
-
-// Comparison function for sorting chunks by distance (closest first)
 static int compare_chunks_by_distance(const void *a, const void *b) {
   const chunk_distance_t *chunk_a = (const chunk_distance_t*)a;
   const chunk_distance_t *chunk_b = (const chunk_distance_t*)b;
@@ -233,27 +182,22 @@ static int compare_chunks_by_distance(const void *a, const void *b) {
 }
 
 usize render_loaded_chunks(renderer_t *state, scene_t *scene, light_t *lights, const usize num_lights) {
-  // Set up scene data for shadow calculations
   set_shadow_scene(scene);
 
   chunk_t **chunks = calloc(MAX_CHUNKS, sizeof(chunk_t*));
   usize chunk_count = 0;
   usize total_triangles_rendered = 0;
-  
-  // Get all loaded chunks from the hash map
+
   get_all_chunks(&scene->chunk_map, chunks, &chunk_count);
-  
+
   if (chunk_count == 0) {
     free(chunks);
     return 0;
   }
-  
-  // Create array for sorting chunks by distance
+
   chunk_distance_t *sorted_chunks = calloc(chunk_count, sizeof(chunk_distance_t));
-  
+
   float2 camera_pos = make_float2(scene->camera_pos.position.x, scene->camera_pos.position.z);
-  
-  // Calculate distances and populate sorting array
   for (usize i = 0; i < chunk_count; i++) {
     if (chunks[i]) {
       float2 chunk_center = make_float2(
@@ -267,20 +211,16 @@ usize render_loaded_chunks(renderer_t *state, scene_t *scene, light_t *lights, c
       sorted_chunks[i].distance = distance;
     }
   }
-  
-  // Sort chunks front-to-back for early Z-rejection
+
   qsort(sorted_chunks, chunk_count, sizeof(chunk_distance_t), compare_chunks_by_distance);
-  
-  // Render chunks in sorted order (closest first)
   for (usize i = 0; i < chunk_count; i++) {
     if (sorted_chunks[i].chunk) {
       total_triangles_rendered += render_chunk(state, sorted_chunks[i].chunk, &scene->camera_pos, lights, num_lights, scene);
     }
   }
-  
-  // Clean up allocated buffers
+
   free(chunks);
   free(sorted_chunks);
-  
+
   return total_triangles_rendered;
 }
